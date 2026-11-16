@@ -28,12 +28,13 @@ Also auto-continued (same live path and budget, and by the boot scan):
 
 | Key | Default | Meaning |
 |---|---|---|
-| `promptText` | `continue` | Exact text sent to each stuck session. |
+| `promptText` | `continue` | Exact text sent for interrupted / 503 / engine-crash / context-overflow / max-tokens stalls. |
+| `fakeCallPrompt` | "There's a literal `<tool_call>…</tool_call>` block in the chat. I think you sent the tool call to the wrong place — the chat instead of DSH. Please issue the real tool call now and continue." | Direct nudge used instead of `promptText` for the fake-tool-call stall, so the model knows what to fix. Its own quoted pair (no inner tag) is inert under the default `toolCallPattern`. |
 | `maxAgeHours` | `72` | Only continue sessions whose turn stopped this recently. |
 | `delaySeconds` | `5` | Delay after host start before the scan runs. |
 | `includeDelegated` | `false` | Also continue orphaned sub-agent/teammate sessions. |
-| `resumeErrorPattern` | `503\|no reachable URL\|every configured URL failed` | Regex: which `turn failed` errors count as transient and get retried. |
-| `toolCallPattern` | `<tool_call / <tool_call> / <function_call / <invoke` variants | Regex: literal tool-call markup in final assistant text that marks a fake-call stall. |
+| `resumeErrorPattern` | `503\|no reachable URL\|every configured URL failed\|engine stopped unexpectedly\|exit code -15\|context_length_exceeded\|leaves no room to answer` | Regex: which `turn failed` errors get a plain `continue`. Engine-crash text says "the next request restarts it" — the continue IS the restart. Context-overflow retries only help once the next request compacts first; if it still overflows the failure is deterministic and the per-boot budget absorbs it. |
+| `toolCallPattern` | tempered pairs of `tool_call` / `function_call` / `invoke`: open + (no same-name tag inside) + an inner `<tag` + close | Literal printed tool-call in the final assistant **text blocks** only (reasoning and tool inputs are never scanned). Quoted examples, repeated mentions, and tool_use JSON do NOT match. Ceilings: argument-less fake calls (no inner tag) are missed; a quoted pair that itself contains inner tags counts. |
 | `errorRetryDelaySeconds` | `60` | Wait before auto-continue after a live stalled turn close. |
 | `maxErrorRetries` | `3` | Max automatic continues per session per boot (all live triggers). |
 

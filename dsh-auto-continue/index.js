@@ -52,6 +52,19 @@ function numberOr(value, fallback) {
 }
 
 /**
+ * Visible TEXT blocks of an assistant message (reasoning and tool_use inputs
+ * deliberately excluded: a model QUOTING tool-call markup while explaining it
+ * must not look like a fake call — the stall signature is printed-call TEXT).
+ * @param {object|undefined} data - assistant/message event data.
+ * @returns {string} joined visible text.
+ */
+function assistantVisibleText(data) {
+  const blocks = data?.message?.content
+  if (!Array.isArray(blocks)) return ''
+  return blocks.filter((block) => block?.type === 'text').map((block) => block.text ?? '').join('\n')
+}
+
+/**
  * Find the last turn-closing event worth resuming, walking back over trailing
  * noise (session/end-seed from GUI live-promotion, job/record events).
  * @param {readonly object[]} events - observation events (closers already folded).
@@ -73,7 +86,7 @@ function resumeCloser(events, errorPattern, toolCallPattern) {
       // scan back from the boundary until the turn's start.
       for (let j = i - 1; j >= 0 && events[j].type !== 'turn/start'; j -= 1) {
         if (events[j].type !== 'assistant/message') continue
-        if (toolCallPattern.test(JSON.stringify(events[j].data ?? {}))) return event // fake tool-call stall
+        if (toolCallPattern.test(assistantVisibleText(events[j].data))) return event // fake tool-call stall
         break
       }
     }
@@ -108,7 +121,7 @@ async function continueSession(ctx, sessionId, promptText, tag) {
  * @param {{promptText: string, maxAgeMs: number, includeDelegated: boolean, errorPattern: RegExp, toolCallPattern: RegExp, log: object}} options - effective configuration plus the named logger.
  * @returns {Promise<void>}
  */
-async function scan(ctx, { promptText, maxAgeMs, includeDelegated, errorPattern, toolCallPattern, log }) {
+async function scan(ctx, { promptText, fakeCallPrompt, maxAgeMs, includeDelegated, errorPattern, toolCallPattern, log }) {
   const now = Date.now()
   const records = await ctx.sessionQuery.listSessions()
   let continued = 0
@@ -132,7 +145,10 @@ async function scan(ctx, { promptText, maxAgeMs, includeDelegated, errorPattern,
         log.info('skipping delegated session', { sessionId })
         continue
       }
-      await continueSession(ctx, sessionId, promptText, `scan-${now}`)
+      // Fake-call stalls (closer "completed" with pair in text) get the direct
+      // nudge so the model re-issues the call instead of just resuming.
+      const text = closer.data?.reason?.kind === 'completed' ? fakeCallPrompt : promptText
+      await continueSession(ctx, sessionId, text, `scan-${now}`)
       continued += 1
       log.info('continued stuck session', { sessionId, closerKind: closer.data?.reason?.kind })
     } catch (error) {
@@ -155,16 +171,19 @@ async function scan(ctx, { promptText, maxAgeMs, includeDelegated, errorPattern,
 export function apply(ctx, config = {}) {
   const log = ctx.logger('dsh-auto-continue')
   const promptText = typeof config.promptText === 'string' && config.promptText.trim() !== '' ? config.promptText : 'continue'
+  // Direct nudge for the fake-tool-call stall: naming the wrong-place call
+  // lets the model correct itself instead of blindly continuing.
+  const fakeCallPrompt = typeof config.fakeCallPrompt === 'string' && config.fakeCallPrompt.trim() !== '' ? config.fakeCallPrompt : "There's a literal <tool_call>…</tool_call> block in the chat. I think you sent the tool call to the wrong place — the chat instead of DSH. Please issue the real tool call now and continue."
   const maxAgeMs = numberOr(config.maxAgeHours, 72) * 3600000
   const includeDelegated = config.includeDelegated === true
   const delayMs = numberOr(config.delaySeconds, 5) * 1000
-  const errorPattern = new RegExp(typeof config.resumeErrorPattern === 'string' && config.resumeErrorPattern.trim() !== '' ? config.resumeErrorPattern : '503|no reachable URL|every configured URL failed', 'i')
-  const toolCallPattern = new RegExp(typeof config.toolCallPattern === 'string' && config.toolCallPattern.trim() !== '' ? config.toolCallPattern : '<\\s*/?\\s*(tool_call|function_call|invoke|antml:tool_call)\\b', 'i')
+  const errorPattern = new RegExp(typeof config.resumeErrorPattern === 'string' && config.resumeErrorPattern.trim() !== '' ? config.resumeErrorPattern : '503|no reachable URL|every configured URL failed|engine stopped unexpectedly|exit code -15|context_length_exceeded|leaves no room to answer', 'i')
+  const toolCallPattern = new RegExp(typeof config.toolCallPattern === 'string' && config.toolCallPattern.trim() !== '' ? config.toolCallPattern : '<tool_call>(?:(?!</?tool_call\\s*>)[\\s\\S])*?<[a-zA-Z_][\\s\\S]*?</tool_call>|<function_call>(?:(?!</?function_call\\s*>)[\\s\\S])*?<[a-zA-Z_][\\s\\S]*?</function_call>|<invoke\\b(?:(?!<invoke\\b|</invoke\\s*>)[\\s\\S])*?<[a-zA-Z_][\\s\\S]*?</invoke>', 'i')
   const errorRetryMs = numberOr(config.errorRetryDelaySeconds, 60) * 1000
   const maxErrorRetries = numberOr(config.maxErrorRetries, 3)
   ctx.effect(() => {
     const timer = setTimeout(() => {
-      scan(ctx, { promptText, maxAgeMs, includeDelegated, errorPattern, toolCallPattern, log }).catch((error) => {
+      scan(ctx, { promptText, fakeCallPrompt, maxAgeMs, includeDelegated, errorPattern, toolCallPattern, log }).catch((error) => {
         log.error('auto-continue scan failed', { reason: error instanceof Error ? error.message : String(error) })
       })
     }, delayMs)
@@ -182,7 +201,7 @@ export function apply(ctx, config = {}) {
         return
       }
       if (event.type === 'assistant/message') {
-        if (toolCallPattern.test(JSON.stringify(event.data ?? {}))) fakeCallSeen.add(sessionId)
+        if (toolCallPattern.test(assistantVisibleText(event.data))) fakeCallSeen.add(sessionId)
         return
       }
       const reason = event.type === 'turn/end' ? event.data?.reason : undefined
@@ -209,7 +228,8 @@ export function apply(ctx, config = {}) {
             if (closer === null) return
             if (Date.now() - closer.time > maxAgeMs) return
             log.info('auto-continuing stalled turn', { sessionId, attempt, trigger })
-            return continueSession(ctx, sessionId, promptText, `retry-${event.seq}-${attempt}`)
+            const text = closer.data?.reason?.kind === 'completed' ? fakeCallPrompt : promptText
+            return continueSession(ctx, sessionId, text, `retry-${event.seq}-${attempt}`)
           } finally {
             observation?.[Symbol.dispose]?.()
           }

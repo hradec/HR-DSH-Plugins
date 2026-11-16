@@ -1,0 +1,5 @@
+# Browser-only bundle: does not restart DSH or start any agents.
+- insert:
+    - id: dsh-chat-bubbles
+      name: '@local/dsh-chat-bubbles'
+      config: {}
