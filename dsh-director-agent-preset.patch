@@ -1,0 +1,230 @@
+diff --git a/README.md b/README.md
+index dc7016f..e9ce2c5 100644
+--- a/README.md
++++ b/README.md
+@@ -32,9 +32,11 @@ terms after native human confirmation. See [LICENSE](LICENSE),
+    ID. For the llama-swap example, use `http://127.0.0.1:11435/v1`. In the model's
+    options, enable **Text** and **Image**, and use limits supported by your server.
+    Both the model and its server must actually support image input.
+-5. Select the model and a project folder, upload your references, and ask the
+-   agent to load `director` and use an existing local ComfyUI workflow. For H3,
+-   also load `h3-prompt-writing`; its optional official-guide setup asks separately.
++5. Select the **Director** agent preset, your model and a project folder, then
++   upload your references and use an existing local ComfyUI workflow. The preset
++   directs the agent to load `director`; for H3 it also loads `h3-prompt-writing`
++   when needed, whose optional official-guide setup asks separately. Other agent
++   presets can still use the plugin by loading `director` explicitly.
+ 
+ **Using different ports, another machine, WSL or a container?** Follow
+ [Connections and changing ports](docs/CONFIGURATION.md). The Harness browser port,
+@@ -45,6 +47,9 @@ settings. Changing one does not change the others.
+ 
+ - **Director skill:** story beats, shots versus clips, pacing, reference casting,
+   exact dialogue and continuity handoffs. Creative decisions remain with the agent.
++- **Director agent preset:** a selectable lean production session with native
++  file/image, search, shell, job, skill, confirmation and presentation tools. It
++  does not select a model, configure ComfyUI or duplicate the Host plugin.
+ - **Optional H3 guidance:** a local Ref2AV wrapper, image-inspection requirements
+   and six-section prompt checks; complete official guides are downloaded separately.
+ - **Review UI:** distinguishable shot/reference cards, incremental reference edits,
+@@ -85,6 +90,9 @@ detected and checked with generic intent.
+ This plugin extends the native Web tool renderer and composer through Harness
+ extension APIs. Compatibility with a different Harness version needs testing.
+ It does not modify global Harness files or install a standalone application.
++The composer GPU status and its Send protection are mounted only while a Session
++uses the stable `director` Agent preset. Other presets do not poll or display GPU
++status and remain usable even when the configured remote ComfyUI GPU is full.
+ 
+ ## Command-line installation alternative
+ 
+diff --git a/cordis.patch.yml b/cordis.patch.yml
+index ad58c84..3b54695 100644
+--- a/cordis.patch.yml
++++ b/cordis.patch.yml
+@@ -1,3 +1,66 @@
+ - insert:
+     - id: dsh-director
+       name: dsh-director
++    - id: preset-director
++      name: '@deepseek-ai/dsh-agent-preset'
++      config:
++        id: director
++        name: Director
++        description: Plan, review, and generate ComfyUI video productions with the Director plugin.
++        order: 5
++        plugins:
++          - id: persona
++            name: '@deepseek-ai/dsh-persona'
++            config:
++              prefix: >-
++                You are a video production director powered by the {{model}} model.
++                For video tasks, load the bundled director skill before planning,
++                reviewing, or generating; for H3 prompting, also load the bundled
++                h3-prompt-writing skill. Use the user's selected model and existing
++                Director and ComfyUI configuration; do not invent unavailable
++                workflows or bypass human review.
++          - id: agent-instructions
++            name: '@deepseek-ai/dsh-agent-instructions'
++            config:
++              maxBytes: 65536
++          - id: time-context
++            name: '@deepseek-ai/dsh-time-context'
++          - id: tool-bash
++            name: '@deepseek-ai/dsh-tool-bash'
++            disabled: !!js process.platform === 'win32'
++          - id: tool-pwsh
++            name: '@deepseek-ai/dsh-tool-pwsh'
++            disabled: !!js process.platform !== 'win32'
++          - id: tool-fs
++            name: '@deepseek-ai/dsh-tool-fs'
++          - id: tool-fs-search
++            name: '@deepseek-ai/dsh-tool-fs-search'
++            config:
++              sampleOverCapGlobResults: false
++          - id: tool-jobs
++            name: '@deepseek-ai/dsh-tool-jobs'
++          - id: skill-filesystem
++            name: '@deepseek-ai/dsh-skill-filesystem'
++          - id: tool-skill
++            name: '@deepseek-ai/dsh-tool-skill'
++          - id: tool-ask-user
++            name: '@deepseek-ai/dsh-tool-ask-user'
++          - id: compaction
++            name: cordis:group
++            group: true
++            isolate:
++              compaction: true
++              toolResultPruner: true
++            config:
++              - id: compaction-basic
++                name: '@deepseek-ai/dsh-compaction-basic'
++              - id: command-compact
++                name: '@deepseek-ai/dsh-command-compact'
++              - id: tool-result-pruner
++                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
++                config:
++                  thresholdChars: 8192
++                  headChars: 4096
++                  tailChars: 1024
++          - id: present
++            name: '@deepseek-ai/dsh-tool-present'
+diff --git a/docs/RELEASE_REVIEW.md b/docs/RELEASE_REVIEW.md
+index fc91141..8f3df92 100644
+--- a/docs/RELEASE_REVIEW.md
++++ b/docs/RELEASE_REVIEW.md
+@@ -25,11 +25,14 @@ not the source test suite. The package includes only root-level compiled JavaScr
+ `.gitignore` blocks unlisted top-level files and common credentials/media/data
+ patterns even under allowed directories. Never force-add local artifacts.
+ 
+-No workflow template or preset builder is committed or distributed. Harness's
+-native coding tools discover/adapt the user's local ComfyUI API graph, then pass
+-`workflow` or `workflow_path` to the generic managed submit tool. Existing local
+-workflow templates remain untracked and are not deleted. No live Harness profile,
+-session, generated clip or installed runtime plugin is migrated by this cleanup.
++No ComfyUI workflow template or workflow preset builder is committed or
++distributed. The bundle does declare one lean DSH Agent preset that selects native
++supporting tools and points the agent to the bundled Director skill; it contains no
++model, endpoint, workflow or user configuration. Harness's native coding tools
++discover/adapt the user's local ComfyUI API graph, then pass `workflow` or
++`workflow_path` to the generic managed submit tool. Existing local workflow
++templates remain untracked and are not deleted. No live Harness profile, session,
++generated clip or installed runtime plugin is migrated by this cleanup.
+ 
+ ## Reproduce without model/GPU access
+ 
+diff --git a/src/client/GpuStatus.jsx b/src/client/GpuStatus.jsx
+index b0293de..e179fb3 100644
+--- a/src/client/GpuStatus.jsx
++++ b/src/client/GpuStatus.jsx
+@@ -12,6 +12,12 @@ async function releaseLiveMemory(){
+   if(!response.ok)throw Error(result?.error||'ComfyUI memory release failed');
+   return result;
+ }
++export function PresetAwareGpuStatus({sessionId,sessionList,...props}){
++  const subscribe=useCallback(listener=>sessionList?.subscribe(listener)??(()=>{}),[sessionList]);
++  const snapshot=useCallback(()=>sessionList?.getSnapshot()?.byId?.[sessionId]?.projectionValues?.agentPreset,[sessionList,sessionId]);
++  const preset=useSyncExternalStore(subscribe,snapshot,snapshot);
++  return preset==='director'?<GpuStatus {...props}/>:null;
++}
+ export function GpuStatus({shell,connection,readStatus=readLiveStatus,releaseMemory=releaseLiveMemory,pollMs=2000}){
+   const subscribe=useCallback(listener=>connection.state.subscribe(listener),[connection]);
+   const snapshot=useCallback(()=>connection.state.getSnapshot(),[connection]);
+diff --git a/src/client/index.jsx b/src/client/index.jsx
+index 943b630..9549f9f 100644
+--- a/src/client/index.jsx
++++ b/src/client/index.jsx
+@@ -1,5 +1,5 @@
+ import {MediaCard} from './MediaCard.jsx';
+-import {GpuStatus,readLiveStatus} from './GpuStatus.jsx';
++import {PresetAwareGpuStatus,readLiveStatus} from './GpuStatus.jsx';
+ import {watchSessionWake} from './session-recovery.mjs';
+ import css from './media.css';
+ export const name='dsh-director-ui';
+@@ -21,6 +21,6 @@ export function apply(ctx){
+   // Director contributes only its own keyed media/review rows.
+   ctx.slots.inject('conversation.input.dock',()=>ctx.slots.register({name:'conversation.input.dock',id:'director-gpu-status',order:-10,inject:sessionId=>{
+     const scope=ctx.sessions?.scope(sessionId);
+-    return {shell:scope?ctx.conversation.input.for(scope):ctx.conversation.input.shell?.(sessionId),connection:ctx.connection};
+-  }},GpuStatus));
++    return {sessionId,sessionList:ctx.sessions?.list,shell:scope?ctx.conversation.input.for(scope):ctx.conversation.input.shell?.(sessionId),connection:ctx.connection};
++  }},PresetAwareGpuStatus));
+ }
+diff --git a/test/director-ui.test.mjs b/test/director-ui.test.mjs
+index 9b87466..ce14105 100644
+--- a/test/director-ui.test.mjs
++++ b/test/director-ui.test.mjs
+@@ -31,11 +31,34 @@ const connected={state:{getSnapshot:()=> 'connected',subscribe:()=>()=>{}}};
+ test('Director extends only its own tool views and resolves the native session input facade',async()=>{
+   const apply=await component('src/client/index.jsx','apply'),registrations=[];
+   const shell={submit(){}},scope={get:()=>conversation},conversation={input:{for:value=>{assert.equal(value,scope);return shell;}},send:async()=>{}};
+-  apply({connection:connected,conversation,sessions:{scope:id=>{assert.equal(id,'s');return scope;}},effect(){},slots:{inject(_name,fn){fn();},register(def,Component){registrations.push({def,Component});return()=>{};}}});
++  const sessionList={getSnapshot:()=>({byId:{s:{projectionValues:{agentPreset:'director'}}}}),subscribe:()=>()=>{}};
++  apply({connection:connected,conversation,sessions:{list:sessionList,scope:id=>{assert.equal(id,'s');return scope;}},effect(){},slots:{inject(_name,fn){fn();},register(def,Component){registrations.push({def,Component});return()=>{};}}});
+   assert.equal(registrations.some(({def})=>def.name==='conversation.chat.node'),false,'native tool-call tree must retain file diffs, search, image and question interaction');
+   assert.deepEqual(registrations.filter(({def})=>def.name==='tool.call.toolview').map(({def})=>def.key).sort(),['director_edit_review','director_show_media']);
+   const dock=registrations.find(({def})=>def.name==='conversation.input.dock');
+   assert.equal(dock.def.inject('s').shell,shell);
++  assert.equal(dock.def.inject('s').sessionId,'s');
++  assert.equal(dock.def.inject('s').sessionList,sessionList);
++});
++
++test('GPU panel and Send protection mount strictly for the Director preset',async t=>{
++  const Component=await component('src/client/GpuStatus.jsx','PresetAwareGpuStatus');
++  let preset='standard',status={phase:'generating',blocked:true,llm:'unloaded'},reads=0,sent=0;
++  const listeners=new Set(),sessionList={getSnapshot:()=>({byId:{s:{projectionValues:{agentPreset:preset}}}}),subscribe:listener=>{listeners.add(listener);return()=>listeners.delete(listener);}};
++  const shell={submit(){sent++;}};
++  await render(t,Component,{sessionId:'s',sessionList,shell,connection:connected,readStatus:async()=>{reads++;return status;},pollMs:10});
++  await act(()=>new Promise(resolve=>setTimeout(resolve,20)));
++  assert.equal(document.querySelector('[role="status"]'),null,'non-Director active VRAM blocks must not render a panel');
++  assert.equal(reads,0,'non-Director Sessions must not poll GPU status');
++  await act(()=>shell.submit());assert.equal(sent,1,'non-Director Send must remain native and unblocked');
++  await act(async()=>{preset='director';for(const listener of listeners)listener();await new Promise(resolve=>setTimeout(resolve,20));});
++  assert.match(document.querySelector('[role="status"]').textContent,/LLM unloaded.*ComfyUI generating/);
++  await act(()=>shell.submit());assert.equal(sent,1,'Director active VRAM blocks still protect Send');
++  status={phase:'ready',blocked:false,llm:'unloaded'};await act(()=>new Promise(resolve=>setTimeout(resolve,20)));
++  assert.match(document.querySelector('[role="status"]').textContent,/GPU ready/);
++  await act(async()=>{preset='standard';for(const listener of listeners)listener();await Promise.resolve();});
++  assert.equal(document.querySelector('[role="status"]'),null);
++  await act(()=>shell.submit());assert.equal(sent,2,'switching away from Director restores native Send');
+ });
+ 
+ test('optional GPU status outage leaves ordinary coding send available',async t=>{
+diff --git a/test/pack.test.mjs b/test/pack.test.mjs
+index 88ae840..7c22488 100644
+--- a/test/pack.test.mjs
++++ b/test/pack.test.mjs
+@@ -16,7 +16,13 @@ test('release archive excludes personal media and works without workspace skills
+   const provider=await createBundledProvider();const result=await provider.list();assert.equal(result.candidates.length,2);
+   const pkg=JSON.parse(await readFile(join(root,'package/package.json'),'utf8'));
+   assert.equal(pkg.dsh.bundle.patch,'./cordis.patch.yml');
+-  assert.match(await readFile(join(root,'package/cordis.patch.yml'),'utf8'),/name: dsh-director/);
++  const bundle=await readFile(join(root,'package/cordis.patch.yml'),'utf8');
++  assert.match(bundle,/name: dsh-director/);assert.equal([...bundle.matchAll(/^\s+name: dsh-director$/gm)].length,1);
++  const presetStart=bundle.indexOf('    - id: preset-director');assert.notEqual(presetStart,-1);const preset=bundle.slice(presetStart);
++  assert.match(preset,/name: '@deepseek-ai\/dsh-agent-preset'/);assert.match(preset,/^\s+id: director$/m);assert.match(preset,/^\s+name: Director$/m);
++  for(const id of ['persona','agent-instructions','time-context','tool-bash','tool-pwsh','tool-fs','tool-fs-search','tool-jobs','skill-filesystem','tool-skill','tool-ask-user','compaction','present'])assert.match(preset,new RegExp(`^\\s+- id: ${id}$`,'m'));
++  assert.match(preset,/- id: tool-bash[\s\S]*?disabled: !!js process\.platform === 'win32'/);assert.match(preset,/- id: tool-pwsh[\s\S]*?disabled: !!js process\.platform !== 'win32'/);
++  assert.doesNotMatch(preset,/^\s+name: dsh-director$/m);
+   // A shared archive must advertise a runnable helper in its own installation,
+   // not a source-checkout path or a dependency supplied only by this machine.
+   const definitions=[];

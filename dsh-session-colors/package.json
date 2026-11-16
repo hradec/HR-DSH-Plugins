@@ -1,0 +1,38 @@
+{
+  "name": "@local/dsh-session-colors",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Sidebar Session-row colors and muted folder-panel backgrounds, shared across browsers through ~/.dsh/session-colors.json.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "session",
+    "folder",
+    "sidebar",
+    "color"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "slots",
+        "connection"
+      ]
+    }
+  }
+}

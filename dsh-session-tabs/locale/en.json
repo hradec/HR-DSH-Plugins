@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Session Tabs",
+    "description": "Browser-style tabs for opened sessions at the top of the conversation area: switch, close, drag-reorder, see running state, and start a new session."
+  }
+}

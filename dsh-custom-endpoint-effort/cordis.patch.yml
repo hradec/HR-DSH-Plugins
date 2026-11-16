@@ -1,0 +1,17 @@
+- insert:
+    - id: custom-endpoint-effort
+      name: '@local/dsh-custom-endpoint-effort'
+      config:
+        # Profile row whose providers are read and rewritten.
+        entryId: llm-pi-ai
+        # [] = every OpenAI-compatible route; list route names to narrow it.
+        routes: []
+        # Per-endpoint /models timeout.
+        timeoutMs: 5000
+        # Reuse efforts for five minutes. Endpoint/model changes or removed
+        # effort declarations refresh immediately; cache survives restarts.
+        refreshMs: 300000
+        # '' = $DSH_HOME/custom-endpoint-effort.cache.json; false = memory only.
+        cacheFile: ''
+        # '' = $DSH_HOME/custom-endpoint-effort.status.json; false disables it.
+        statusFile: ''

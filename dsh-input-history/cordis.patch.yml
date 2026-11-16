@@ -1,0 +1,5 @@
+# Pure browser plugin; this Loader row declares its client bundle.
+- insert:
+    - id: dsh-input-history
+      name: '@local/dsh-input-history'
+      config: {}

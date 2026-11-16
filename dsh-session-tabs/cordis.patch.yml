@@ -1,0 +1,6 @@
+# The Host row is intentionally empty: session tabs are a pure browser plugin.
+# Enabling this row is what declares the package to the Web client module graph.
+- insert:
+    - id: dsh-session-tabs
+      name: '@local/dsh-session-tabs'
+      config: {}

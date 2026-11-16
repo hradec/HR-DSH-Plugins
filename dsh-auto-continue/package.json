@@ -1,0 +1,23 @@
+{
+  "name": "@local/dsh-auto-continue",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "After a DSH restart, automatically send \"continue\" to every session that was still running when the process died (the sessions showing the \"Task stopped — the turn was closed when DSH restarted\" card).",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "session",
+    "restart",
+    "crash-recovery",
+    "continue"
+  ],
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "README.md"
+  ]
+}

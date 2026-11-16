@@ -1,0 +1,683 @@
+diff --git a/README.md b/README.md
+index dc7016f..81e1cec 100644
+--- a/README.md
++++ b/README.md
+@@ -50,7 +50,7 @@ settings. Changing one does not change the others.
+ - **Review UI:** distinguishable shot/reference cards, incremental reference edits,
+   versioned human confirmation, inline media and enlarged previews.
+ - **Managed submission:** preflight, actual reference-byte/order checks, ComfyUI
+-  monitoring, llama-swap unload, turn conclusion and verified GPU handoff.
++  monitoring, configured LLM handoff, turn conclusion and verified GPU release.
+ - **Asset reuse:** recover session upload paths, register selected local/generated
+   images and stage selected references with byte-verified bindings.
+ - **Web integration:** dedicated Director media/review views alongside Harness's
+@@ -280,13 +280,18 @@ Optional values in the `config` of the `dsh-director` profile entry:
+ 
+ ```yaml
+ comfyBaseUrl: http://127.0.0.1:8188
++llmHandoffMode: llama-swap # or comfy-only when the DSH LLM is off the ComfyUI GPU
+ llamaSwapBaseUrl: http://127.0.0.1:11435
+ mediaRoot: C:/path/to/private/director-media
+ skillCacheRoot: C:/path/to/private/director-skills
+ ```
+ 
+ Service addresses must be HTTP(S) origins without embedded credentials, paths or
+-queries. This package contains no local profile, model aliases or machine paths.
++queries. `llmHandoffMode` defaults to `llama-swap`, which unloads and verifies a
++local shared-GPU LLM. Use `comfy-only` only when the DSH model provider is remote
++or otherwise does not occupy the ComfyUI GPU; that mode never contacts llama-swap
++and does not wait for ComfyUI cache or physical VRAM release. This
++package contains no local profile, model aliases or machine paths.
+ 
+ The default private cache is `DSH_HOME/director-media`, or the user's
+ `.dsh/director-media`. It stores session-scoped catalog metadata and media
+@@ -317,19 +322,20 @@ directly to the Internet.
+ 
+ ## Jobs, GPU handoff and limitations
+ 
+-An accepted managed submission posts the selected graph, unloads llama-swap and
+-concludes the current turn. Completion monitoring waits for an idle ComfyUI queue
+-and verified memory release before waking the agent. `waiting_for_vram` means
++An accepted managed submission posts the selected graph, performs the configured
++LLM handoff and concludes the current turn. `llama-swap` mode unloads and verifies
++the local LLM; `comfy-only` mode treats it as external and makes no swap request.
++Completion monitoring waits for an idle ComfyUI queue and verified memory release
++before waking the agent. `waiting_for_vram` means
+ execution has ended but handoff is pending; inspect saved job output, **do not
+ resubmit**. Cancelling a waiting monitor is not proof of GPU release.
+ 
+-The browser keeps drafts editable while unsafe sending is paused. It does not
+-automatically send a saved draft when generation ends. A service outage alone
+-does not block ordinary chat when no managed handoff or previous GPU risk is
+-known. Known generation or unverified release still pauses sending, including
+-when a subsequent status request fails. This is not a global GPU
+-scheduler: direct API calls, other applications and unrelated automatic job wakes
+-can still load models. Standard ComfyUI has no atomic idle-and-free operation.
++In `llama-swap` mode, completion monitoring waits for an idle ComfyUI queue and
++verified memory release before waking the agent. In `comfy-only` mode, terminal
++ComfyUI history is sufficient; no `/free` call, VRAM release button or
++`waiting_for_vram` cleanup state is emitted. Native DSH chat remains available, and
++cancelling a local handoff monitor is not proof of GPU release; inspect saved job
++output and **do not resubmit** a completed/failed prompt.
+ Monitoring is process-local and is lost on a Harness restart; generated output
+ remains in ComfyUI. No jobs are queued by merely loading this plugin.
+ 
+diff --git a/docs/CONFIGURATION.md b/docs/CONFIGURATION.md
+index 10968ed..3c9a991 100644
+--- a/docs/CONFIGURATION.md
++++ b/docs/CONFIGURATION.md
+@@ -1,8 +1,10 @@
+ # Connections and changing ports
+ 
+ This is the configuration guide referenced by the demo's installation chapter.
+-The example assumes Harness, ComfyUI and llama-swap are already installed. The
+-plugin does not start these services or change their listening ports.
++The shared-GPU example assumes Harness, ComfyUI and llama-swap are already
++installed. A remote-LLM setup can use `llmHandoffMode: comfy-only` without
++llama-swap. The plugin does not start these services or change their listening
++ports.
+ 
+ ## Which setting do I change?
+ 
+@@ -11,7 +13,8 @@ plugin does not start these services or change their listening ports.
+ | Browser → Harness Web | `http://127.0.0.1:3080` | Harness launch flag `--port` |
+ | Harness → model API | `http://127.0.0.1:11435/v1` | Harness **Settings → Models**, provider API address |
+ | Director → ComfyUI | `http://127.0.0.1:8188` | Director plugin `config.comfyBaseUrl` |
+-| Director → llama-swap control API | `http://127.0.0.1:11435` | Director plugin `config.llamaSwapBaseUrl` |
++| Director LLM handoff | `llama-swap` | Director plugin `config.llmHandoffMode` |
++| Director → llama-swap control API | `http://127.0.0.1:11435` | Director plugin `config.llamaSwapBaseUrl` (ignored in `comfy-only` mode) |
+ 
+ `3080` is an example Harness port, not a required default. `8188` and `11435`
+ are this plugin's default service ports. The model API includes `/v1` for the
+@@ -76,6 +79,25 @@ Changing the llama-swap port also requires changing the model provider's API
+ address in **Settings → Models** to `http://127.0.0.1:11535/v1`. The plugin control
+ URL remains `http://127.0.0.1:11535`, without `/v1`.
+ 
++## Run without llama-swap
++
++Use this only when the DSH language-model provider is remote, on another GPU, or
++otherwise guaranteed not to consume the GPU used by ComfyUI:
++
++```yaml
++- id: dsh-director
++  config:
++    llmHandoffMode: comfy-only
++```
++
++`comfy-only` never resolves or contacts `llamaSwapBaseUrl`. Managed submission
++queues and monitors ComfyUI, concludes the active LLM turn, and settles as soon as
++terminal ComfyUI history is available; it does not pause native sends, call
++ComfyUI `/free`, show a VRAM release control, or wait for physical VRAM headroom.
++The default `llama-swap` mode is unchanged and remains required when both model
++runtimes share a GPU. Do not use a fake llama-swap endpoint to bypass shared-GPU
++coordination.
++
+ ## Configure model and image input
+ 
+ In Harness **Settings → Models**, add or edit your model provider:
+@@ -93,12 +115,11 @@ model into a vision model or configure the server's vision projector. Follow
+ your backend's own vision setup instructions. llama-swap, Ollama and LM Studio
+ do not share identical configuration or model IDs.
+ 
+-Other compatible servers can provide the conversation model, but Director's
+-managed unload/handoff currently calls llama-swap's control API. Pointing
+-`llamaSwapBaseUrl` at an Ollama or LM Studio server does not add that API. The
+-managed handoff therefore requires a separately reachable, applicable llama-swap
+-service; general model-provider compatibility does not imply GPU coordination
+-with every backend.
++Other compatible servers can provide the conversation model. In the default
++`llama-swap` mode, managed unload/handoff calls llama-swap's control API; pointing
++`llamaSwapBaseUrl` at an Ollama or LM Studio server does not add that API. Use
++`comfy-only` for an off-GPU provider instead. General model-provider compatibility
++does not itself prove that two runtimes can safely share one GPU.
+ 
+ ## Another machine, WSL or a container
+ 
+@@ -121,16 +142,16 @@ on Linux/macOS use `curl`.
+ ```sh
+ curl --fail http://127.0.0.1:8190/system_stats
+ curl --fail http://127.0.0.1:11535/v1/models
+-curl --fail http://127.0.0.1:11535/running
++curl --fail http://127.0.0.1:11535/running # llama-swap mode only
+ ```
+ 
+-The first checks ComfyUI, the second the example model API, and the third
+-llama-swap's control endpoint. A server requiring credentials needs its own
+-authenticated check. The plugin's current service-origin settings do not accept
+-embedded credentials or arbitrary API paths.
++The first checks ComfyUI, the second the example model API, and the optional third
++checks llama-swap's control endpoint. A server requiring credentials needs its own
++authenticated check. The plugin's service-origin settings do not accept embedded
++credentials or arbitrary API paths.
+ 
+ If chat works but Director cannot stage references or submit, check
+-`comfyBaseUrl`. If chat works but unloading fails, check `llamaSwapBaseUrl` and
+-the actual llama-swap service. If images upload but the model cannot see them,
++`comfyBaseUrl`. In `llama-swap` mode, if unloading fails, check
++`llamaSwapBaseUrl` and the actual llama-swap service. If images upload but the model cannot see them,
+ check both Harness's **Image** input option and the server/model's vision support.
+ No ComfyUI workflow, node or model weight is supplied by the plugin.
+diff --git a/src/client/GpuStatus.jsx b/src/client/GpuStatus.jsx
+index b0293de..e32f9cc 100644
+--- a/src/client/GpuStatus.jsx
++++ b/src/client/GpuStatus.jsx
+@@ -20,14 +20,15 @@ export function GpuStatus({shell,connection,readStatus=readLiveStatus,releaseMem
+   const [recovering,setRecovering]=useState(false),[recoveryError,setRecoveryError]=useState('');
+   const check=useCallback(async()=>{
+     const startedConnected=connection.state.getSnapshot()==='connected';
+-    const unavailable=()=>({...unknown,blocked:lastStatus.current.blocked});
++    const unavailable=()=>({...unknown,blocked:lastStatus.current.blocked,llm:lastStatus.current.llm});
+     let next;try{next=await readStatus();if(!['ready','generating','releasing_vram','unknown'].includes(next?.phase)||typeof next.blocked!=='boolean')next=unavailable();}catch{next=unavailable();}
+     lastStatus.current=next;
+     if(alive.current)setStatus(next);
+     const connection_blocked=!startedConnected||connection.state.getSnapshot()!=='connected';
+     return {...next,blocked:next.blocked||connection_blocked,connection_blocked};
+   },[readStatus,connection]);
+-  const blocked=status.blocked||connectionState!=='connected';
++  const handoffBlocked=status.llm!=='external'&&status.blocked;
++  const blocked=handoffBlocked||connectionState!=='connected';
+   const canRecover=status.phase==='releasing_vram'&&status.llm==='unloaded'&&connectionState==='connected';
+   const recover=useCallback(async()=>{
+     setRecovering(true);setRecoveryError('');
+@@ -57,10 +58,10 @@ export function GpuStatus({shell,connection,readStatus=readLiveStatus,releaseMem
+     if(blocked)observer.observe(seat,{subtree:true,childList:true});
+     return ()=>{observer.disconnect();for(const [button,original] of marked){delete button.dataset.directorSendPaused;if(original===null)button.removeAttribute('aria-disabled');else button.setAttribute('aria-disabled',original);}};
+   },[blocked]);
+-  const title=status.phase==='generating'?`${status.llm==='unloaded'?'LLM unloaded':status.llm==='loaded'?'LLM loaded':'Checking LLM'} · ComfyUI generating`:
+-    status.phase==='releasing_vram'?'Generation finished · Releasing VRAM':status.phase==='ready'?`GPU ready${!blocked?' · You can send messages':''}`:status.blocked?'Checking GPU handoff · Sending paused':'GPU status unavailable · Chat available';
++  const title=status.phase==='generating'?`${status.llm==='external'?'External LLM':status.llm==='unloaded'?'LLM unloaded':status.llm==='loaded'?'LLM loaded':'Checking LLM'} · ComfyUI generating`:
++    status.phase==='releasing_vram'?'Generation finished · Releasing VRAM':status.phase==='ready'?`GPU ready${!blocked?' · You can send messages':''}`:handoffBlocked?'Checking GPU handoff · Sending paused':'GPU status unavailable · Chat available';
+   const connectionTitle=connectionState==='connected'?'Connected':connectionState==='connecting'?'Reconnecting · Restoring live updates':connectionState==='disconnected'?'Disconnected · Messages may be out of date':'Checking connection · Sending paused';
+   return <div ref={anchor} className={`dsh-director-gpu dsh-director-gpu-${status.phase}`} role="status" aria-live="polite" data-gpu-phase={status.phase}>
+-    <span className="dsh-director-gpu-light" aria-hidden="true"/><div><span>{title}</span><small data-connection-state={connectionState??'unknown'}>{connectionTitle}</small>{connectionState!=='connected'?<small>You can keep editing. Sending resumes when connected.</small>:status.blocked&&<small>You can write a draft. Sending resumes after verified GPU release.</small>}{status.warning&&<small className="dsh-director-gpu-warning">{status.warning}</small>}{canRecover&&<button type="button" data-action="release-comfy-vram" disabled={recovering} onClick={recover}>{recovering?'Releasing…':'Release ComfyUI memory'}</button>}{recoveryError&&<small className="dsh-director-gpu-warning">{recoveryError}</small>}</div>
++    <span className="dsh-director-gpu-light" aria-hidden="true"/><div><span>{title}</span><small data-connection-state={connectionState??'unknown'}>{connectionTitle}</small>{connectionState!=='connected'?<small>You can keep editing. Sending resumes when connected.</small>:handoffBlocked&&<small>You can write a draft. Sending resumes after verified GPU release.</small>}{status.warning&&<small className="dsh-director-gpu-warning">{status.warning}</small>}{canRecover&&<button type="button" data-action="release-comfy-vram" disabled={recovering} onClick={recover}>{recovering?'Releasing…':'Release ComfyUI memory'}</button>}{recoveryError&&<small className="dsh-director-gpu-warning">{recoveryError}</small>}</div>
+   </div>;
+ }
+diff --git a/src/client/send-protection.mjs b/src/client/send-protection.mjs
+index bf862d9..01fe506 100644
+--- a/src/client/send-protection.mjs
++++ b/src/client/send-protection.mjs
+@@ -13,7 +13,8 @@ export function protectSend(shell,owner){
+       void (async()=>{
+         try{
+           const status=await current.check();if(!entry.owners.has(current))return;
+-          if(status?.blocked===false&&['ready','unknown'].includes(status.phase))entry.native.apply(shell,args);
++          const externalChat=status?.llm==='external'&&status?.connection_blocked!==true;
++           if(externalChat||(status?.blocked===false&&['ready','unknown'].includes(status.phase)))entry.native.apply(shell,args);
+           else for(const listener of entry.owners)listener.onBlocked(status);
+         }catch{for(const listener of entry.owners)listener.onBlocked({phase:'unknown',blocked:true,llm:'unknown'});}
+         finally{entry.checking=false;}
+diff --git a/src/gpu-status.mjs b/src/gpu-status.mjs
+index bbf5ff9..9deb207 100644
+--- a/src/gpu-status.mjs
++++ b/src/gpu-status.mjs
+@@ -5,9 +5,10 @@ function models(value){
+   if(items.some(v=>typeof v!=='string'&&(!v||typeof(v.model??v.name)!=='string')))throw Error('Invalid running model entry');
+   return items.length;
+ }
+-const unknown=blocked=>({phase:'unknown',blocked,llm:'unknown',warning:blocked?'GPU handoff status unavailable. Sending is paused until the active GPU handoff is verified.':'GPU status unavailable. No active GPU handoff is known; ordinary chat remains available.'});
+-export function createGpuStatus({comfyBaseUrl='http://127.0.0.1:8188',llamaSwapBaseUrl='http://127.0.0.1:11435',fetchImpl=globalThis.fetch}={}){
+-  const tasks=new Map();
++const unknown=(blocked,llm='unknown')=>({phase:'unknown',blocked,llm,warning:blocked?(llm==='external'?'GPU status unavailable. External LLM chat remains available.':'GPU handoff status unavailable. Sending is paused until the active GPU handoff is verified.'):'GPU status unavailable. No active GPU handoff is known; ordinary chat remains available.'});
++export function createGpuStatus({comfyBaseUrl='http://127.0.0.1:8188',llamaSwapBaseUrl='http://127.0.0.1:11435',llmHandoffMode='llama-swap',fetchImpl=globalThis.fetch}={}){
++  if(!['llama-swap','comfy-only'].includes(llmHandoffMode))throw Error(`Unknown LLM handoff mode: ${llmHandoffMode}`);
++  const usesLlamaSwap=llmHandoffMode==='llama-swap',tasks=new Map();
+   function update(value){
+     if(!value?.prompt_id)return;
+     if(['ready_for_review','submission_failed'].includes(value.phase))tasks.delete(value.prompt_id);
+@@ -18,34 +19,35 @@ export function createGpuStatus({comfyBaseUrl='http://127.0.0.1:8188',llamaSwapB
+   async function sample(){
+     try{
+       const get=async(base,path)=>{const r=await fetchImpl(new URL(path,base),{redirect:'error',signal:AbortSignal.timeout(4000)});if(!r.ok)throw Error('Service unavailable');return r.json();};
+-      const evidence=await Promise.allSettled([get(comfyBaseUrl,'/queue'),get(llamaSwapBaseUrl,'/running'),get(comfyBaseUrl,'/system_stats')]);
++      const evidence=await Promise.allSettled([get(comfyBaseUrl,'/queue'),...(usesLlamaSwap?[get(llamaSwapBaseUrl,'/running')]:[]),get(comfyBaseUrl,'/system_stats')]);
+       const queue=evidence[0].value;
+       if(Array.isArray(queue?.queue_running)&&Array.isArray(queue?.queue_pending)&&(queue.queue_running.length||queue.queue_pending.length))knownGpuRisk=true;
+       if(evidence.some(value=>value.status==='rejected'))throw Error('Incomplete GPU evidence');
+-      const running=evidence[1].value,stats=evidence[2].value;
++      const running=usesLlamaSwap?evidence[1].value:undefined,stats=evidence[usesLlamaSwap?2:1].value;
+       const queueCounts=q=>{if(!Array.isArray(q?.queue_running)||!Array.isArray(q?.queue_pending))throw Error('Invalid queue');return {running:q.queue_running.length,queued:q.queue_pending.length};};
+-      const llm=models(running)?'loaded':'unloaded';
++      const llm=usesLlamaSwap?(models(running)?'loaded':'unloaded'):'external';
+       const devices=stats?.devices?.filter(d=>d.type==='cuda');
+       if(!devices?.length||devices.some(d=>![d.vram_total,d.vram_free,d.torch_vram_total,d.torch_vram_free].every(v=>Number.isFinite(v)&&v>=0)||d.vram_total===0||d.vram_free>d.vram_total||d.torch_vram_free>d.torch_vram_total||d.torch_vram_total>d.vram_total))throw Error('Invalid GPU evidence');
+       const cacheFree=devices.every(d=>d.torch_vram_total<=64*MiB);
+       const physicalFree=cacheFree&&devices.every(d=>(d.vram_free-d.torch_vram_free)/d.vram_total>=0.9);
+       const counts=queueCounts(queue),busy=counts.running+counts.queued;
+-      const generating=c=>{knownGpuRisk=true;return {phase:'generating',blocked:true,llm,...c,...(llm==='loaded'?{warning:'LLM is loaded while ComfyUI is running. Sending is paused to avoid a VRAM conflict.'}:{})};};
++      const generating=c=>{knownGpuRisk=true;return {phase:'generating',blocked:true,llm,...c,...(usesLlamaSwap&&llm==='loaded'?{warning:'LLM is loaded while ComfyUI is running. Sending is paused to avoid a VRAM conflict.'}:{})};};
+       if(busy)return generating(counts);
+       // Cancelling a monitor is not release evidence. Recover only from fresh GPU evidence.
+       if(physicalFree)for(const [id,t] of tasks)if(['cancelled','unmonitored'].includes(t.phase))tasks.delete(id);
+       const active=[...tasks.values()];
+-      if(active.length)return {phase:active.some(t=>['queued','unloading_llm','generating'].includes(t.phase))?'generating':'releasing_vram',blocked:true,llm,...(active.some(t=>['monitor_error','waiting_for_history','unmonitored'].includes(t.phase))?{warning:'GPU handoff is not verified. Check the job monitor; do not resubmit the video.'}:{})};
+-      if(!cacheFree||(llm==='unloaded'&&!physicalFree)){knownGpuRisk=true;return {phase:'releasing_vram',blocked:true,llm,warning:'ComfyUI memory is not released yet. Sending stays paused until GPU release is verified.'};}
++      if(active.length)return {phase:usesLlamaSwap?(active.some(t=>['queued','unloading_llm','generating'].includes(t.phase))?'generating':'releasing_vram'):'generating',blocked:true,llm,...(active.some(t=>['monitor_error','waiting_for_history','unmonitored'].includes(t.phase))?{warning:'GPU handoff is not verified. Check the job monitor; do not resubmit the video.'}:{})};
++      if(usesLlamaSwap&&(!cacheFree||(llm==='unloaded'&&!physicalFree))){knownGpuRisk=true;return {phase:'releasing_vram',blocked:true,llm,warning:'ComfyUI memory is not released yet. Sending stays paused until GPU release is verified.'};}
+       // Statistics may be slow. Do not publish old idle evidence after a new prompt.
+       const finalQueue=queueCounts(await get(comfyBaseUrl,'/queue'));
+       if(finalQueue.running+finalQueue.queued)return generating(finalQueue);
+       if(tasks.size)return {phase:'releasing_vram',blocked:true,llm};
+       knownGpuRisk=false;
+       return {phase:'ready',blocked:false,llm,...(lastWarning?{warning:lastWarning}:{})};
+-    }catch{return unknown(tasks.size>0||knownGpuRisk);}
++    }catch{return unknown(tasks.size>0||knownGpuRisk,usesLlamaSwap?'unknown':'external');}
+   }
+   async function recover(){
++    if(!usesLlamaSwap)return sample();
+     if(tasks.size)throw Error('A managed ComfyUI handoff is still active');
+     const get=async(base,path)=>{
+       const response=await fetchImpl(new URL(path,base),{redirect:'error',signal:AbortSignal.timeout(4000)});
+@@ -53,14 +55,14 @@ export function createGpuStatus({comfyBaseUrl='http://127.0.0.1:8188',llamaSwapB
+       return response.json();
+     };
+     const checkIdle=async()=>{
+-      const [queue,running]=await Promise.all([get(comfyBaseUrl,'/queue'),get(llamaSwapBaseUrl,'/running')]);
++      const [queue,running]=await Promise.all([get(comfyBaseUrl,'/queue'),...(usesLlamaSwap?[get(llamaSwapBaseUrl,'/running')]:[])]);
+       if(!Array.isArray(queue?.queue_running)||!Array.isArray(queue?.queue_pending)||queue.queue_running.length||queue.queue_pending.length)throw Error('ComfyUI queue is busy or unavailable');
+-      if(models(running))throw Error('LLM model is loaded');
++      if(usesLlamaSwap&&models(running))throw Error('LLM model is loaded');
+     };
+     await checkIdle();
+     const current=await sample();
+     if(current.phase==='ready')return current;
+-    if(current.phase!=='releasing_vram'||current.llm!=='unloaded')throw Error('GPU release cannot be verified now');
++    if(current.phase!=='releasing_vram'||(usesLlamaSwap?current.llm!=='unloaded':current.llm!=='external'))throw Error('GPU release cannot be verified now');
+     await checkIdle();
+     const response=await fetchImpl(new URL('/free',comfyBaseUrl),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({unload_models:true,free_memory:true}),redirect:'error',signal:AbortSignal.timeout(15000)});
+     if(!response.ok)throw Error(`ComfyUI memory release failed (${response.status})`);
+diff --git a/src/image-staging.mjs b/src/image-staging.mjs
+index 75d8023..dbb2425 100644
+--- a/src/image-staging.mjs
++++ b/src/image-staging.mjs
+@@ -2,7 +2,6 @@ import {createHash,randomUUID} from 'node:crypto';
+ import {mkdir,open,readFile,rename,unlink} from 'node:fs/promises';
+ import {extname,join,resolve} from 'node:path';
+ import {imageType} from './image-type.mjs';
+-import {rejectLinkedSource} from './local-source.mjs';
+ import {inspectedExternalImage} from './media-tool.mjs';
+ 
+ const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
+@@ -28,7 +27,6 @@ export async function localImage(path,{cwd,fs,session,signal,maxBytes,knownUploa
+   if(fs.processPathFromHostPath?.(host)!==host)fail('filesystem is not mapped to this host; make the file available through the authorized Harness filesystem first.');
+   if(!fs.contains(parent,target)&&!knownUpload&&!inspectedExternalImage(session,source_path))fail(`source is outside the workspace; first call read_image(${JSON.stringify({file_path:source_path})}) in this session.`);
+   if(fs.processPathFromHostPath?.(source_path)!==source_path)fail('original source path is not mapped to this host.');
+-  await rejectLinkedSource(source_path,signal);
+   const handle=await open(host,'r');
+   try{
+     const before=await handle.stat();
+diff --git a/src/index.mjs b/src/index.mjs
+index 781df31..15c6b9e 100644
+--- a/src/index.mjs
++++ b/src/index.mjs
+@@ -16,11 +16,13 @@ export const inject=['tools','jobs','skills','fs','connection','webServer','atta
+ export const Config=z.object({
+   comfyBaseUrl:z.string().default('http://127.0.0.1:8188'),
+   llamaSwapBaseUrl:z.string().default('http://127.0.0.1:11435'),
++  llmHandoffMode:z.union(['llama-swap','comfy-only']).default('llama-swap'),
+   mediaRoot:z.string().default(join(process.env.DSH_HOME||join(homedir(),'.dsh'),'director-media')),
+   skillCacheRoot:z.string().default(join(process.env.DSH_HOME||join(homedir(),'.dsh'),'director-skills'))
+ });
+ export async function apply(ctx,config={}){
+-  for(const key of ['comfyBaseUrl','llamaSwapBaseUrl'])if(config[key]){
++  const llmHandoffMode=config.llmHandoffMode??'llama-swap';
++  for(const key of ['comfyBaseUrl',...(llmHandoffMode==='llama-swap'?['llamaSwapBaseUrl']:[])])if(config[key]){
+     const url=new URL(config[key]);
+     if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.pathname!=='/'||url.search||url.hash)throw new Error(`${key} must be an HTTP(S) origin, not a path or credentials.`);
+   }
+@@ -32,8 +34,9 @@ export async function apply(ctx,config={}){
+   ctx.inject(['tools','userQuestions'],scoped=>{
+     scoped.effect(()=>scoped.tools.register(createH3GuideTool({guideStore,userQuestions:scoped.userQuestions})),'director optional H3 guide setup');
+   });
+-  const gpuStatus=createGpuStatus(config);
+-  registerSubmit(ctx,{...config,onGpuState:value=>gpuStatus.update(value)});
++  const handoffConfig={...config,llmHandoffMode};
++  const gpuStatus=createGpuStatus(handoffConfig);
++  registerSubmit(ctx,{...handoffConfig,onGpuState:value=>gpuStatus.update(value)});
+   ctx.effect(()=>registerGpuStatusRoute(ctx,gpuStatus),'director GPU status');
+   ctx.effect(()=>registerGpuReleaseRoute(ctx,gpuStatus),'director GPU release');
+   const store=createMediaStore({root:config.mediaRoot||join(process.env.DSH_HOME||join(homedir(),'.dsh'),'director-media')});
+diff --git a/src/media-store.mjs b/src/media-store.mjs
+index 57bcf55..1346c41 100644
+--- a/src/media-store.mjs
++++ b/src/media-store.mjs
+@@ -1,8 +1,8 @@
+ import {randomBytes,createHash} from 'node:crypto';
+-import {mkdir,open,readFile,rename,realpath,unlink} from 'node:fs/promises';
++import {constants} from 'node:fs';
++import {lstat,mkdir,open,readFile,rename,realpath,unlink} from 'node:fs/promises';
+ import {basename,extname,join,resolve} from 'node:path';
+ import {imageType} from './image-type.mjs';
+-import {rejectLinkedSource} from './local-source.mjs';
+ 
+ export class MediaError extends Error {
+   constructor(message,status=400){super(message);this.status=status;}
+@@ -64,7 +64,6 @@ export function createMediaStore({root,maxBytes=512*1024*1024}){
+     if(!fs.contains(parent,target)&&!externalEvidence)throw new MediaError('Source is outside the session workspace; inspect the actual uploaded image first.',403);
+     const supplied=resolve(cwd,path);
+     if(fs.processPathFromHostPath?.(supplied)!==supplied)throw new MediaError('Original source path is not mapped to this host.');
+-    await rejectLinkedSource(supplied,signal);
+     const canonical=await realpath(hostPath), id=randomBytes(32).toString('base64url');
+     await mkdir(root,{recursive:true,mode:0o700});
+     const temporary=join(root,id+'.part'), snapshot=join(root,id+'.bin');
+@@ -92,8 +91,9 @@ export function createMediaStore({root,maxBytes=512*1024*1024}){
+     let handle;
+     try{
+       const snapshot=join(root,record.id+'.bin');
+-      await rejectLinkedSource(snapshot,signal);
+-      handle=await open(snapshot,'r');
++      const entry=await lstat(snapshot);
++      if(!entry.isFile())throw new MediaError('Stored media changed.',409);
++      handle=await open(snapshot,constants.O_RDONLY|(constants.O_NOFOLLOW??0));
+       const before=await handle.stat({bigint:true}),stamp=fileStamp(before);
+       if(!before.isFile()||before.size!==BigInt(record.size))throw new MediaError('Stored media changed.',409);
+       const verification=record.sha256+':'+stamp;
+diff --git a/src/submit-comfy-video.mjs b/src/submit-comfy-video.mjs
+index db2d55a..0a51991 100644
+--- a/src/submit-comfy-video.mjs
++++ b/src/submit-comfy-video.mjs
+@@ -386,7 +386,7 @@ function monitorSleep(ms, {sleep, signal}) {
+ }
+ 
+ async function monitorComfyPrompt(promptId, options) {
+-  const { fetchImpl, signal, pollIntervalMs, comfyBaseUrl, publish, handoffRetryIntervalMs } = options
++  const { fetchImpl, signal, pollIntervalMs, comfyBaseUrl, publish, handoffRetryIntervalMs, llmHandoffMode = 'llama-swap' } = options
+   // A cached/fast workflow must not wake the model before the submitting turn yields.
+   await monitorWait(() => options.handoffReady, signal)
+   while (!signal.aborted) {
+@@ -415,6 +415,11 @@ async function monitorComfyPrompt(promptId, options) {
+       const output = {prompt_id: promptId, execution_status: failed ? 'failed' : 'completed', execution_detail: detail,
+         output_files: files, output_artifacts: artifacts,
+         review_instruction: 'Download the exact recorded output_artifacts view_url files into this session workspace. Verify the files and required saved latent slots, then call director_show_media with the local file paths to show images, videos or audio in the conversation. Visual and creative review belongs to the user unless explicitly requested; continue an already-authorized chain after technical checks. Do not create unrequested rerenders. Display does not establish acceptance.'}
++      if(llmHandoffMode==='comfy-only'){
++        const final={...output,phase:'ready_for_review',comfy_release:{skipped:true,reason:'external_llm'}}
++        publish(final)
++        return {status: output.execution_status, detail, output: JSON.stringify(final)}
++      }
+       const pending = release => publish({...output, phase: 'waiting_for_vram', comfy_release: release,
+         handoff_instruction: 'ComfyUI execution has ended. Waiting for verified GPU handoff; do not resubmit or regenerate this prompt. Read saved output_artifacts without waiting for the job to finish, or cancel only this monitor. A new user message can still load the LLM.'})
+       // Publish artifacts before cleanup, but do not settle the registry job: any
+@@ -502,6 +507,7 @@ export function createSubmitComfyVideo({
+   fetchImpl: suppliedFetch = globalThis.fetch,
+   comfyBaseUrl = 'http://127.0.0.1:8188',
+   llamaSwapBaseUrl = 'http://127.0.0.1:11435',
++  llmHandoffMode = 'llama-swap',
+   sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms)),
+   readFileImpl = readFile,
+   unloadTimeoutMs = DEFAULT_UNLOAD_TIMEOUT_MS,
+@@ -513,10 +519,13 @@ export function createSubmitComfyVideo({
+   startJob,
+   onGpuState: observeGpuState,
+ } = {}) {
++  if(!['llama-swap','comfy-only'].includes(llmHandoffMode))throw new Error(`Unknown LLM handoff mode: ${llmHandoffMode}`)
++  const usesLlamaSwap=llmHandoffMode==='llama-swap'
+   // UI observation must never alter the managed submission/handoff protocol.
+   const onGpuState=value=>{try{observeGpuState?.(value)}catch{}};
+-  // One transport boundary covers preflight/monitor/cancel/unload.
+-  const origins = new Map([['http://127.0.0.1:8188', new URL(comfyBaseUrl).origin], ['http://127.0.0.1:11435', new URL(llamaSwapBaseUrl).origin]])
++  // One transport boundary covers preflight/monitor/cancel and optional unload.
++  const origins = new Map([['http://127.0.0.1:8188', new URL(comfyBaseUrl).origin]])
++  if(usesLlamaSwap)origins.set('http://127.0.0.1:11435',new URL(llamaSwapBaseUrl).origin)
+   comfyBaseUrl = origins.get('http://127.0.0.1:8188')
+   const fetchImpl = (input, init) => {
+     const url = new URL(input)
+@@ -600,7 +609,7 @@ export function createSubmitComfyVideo({
+     if (typeof queued.prompt_id !== 'string' || queued.prompt_id === '') {
+       throw new Error(`ComfyUI accepted no prompt id: ${JSON.stringify(queued)}`)
+     }
+-    onGpuState?.({prompt_id:queued.prompt_id,phase:'unloading_llm'});
++    if(usesLlamaSwap)onGpuState?.({prompt_id:queued.prompt_id,phase:'unloading_llm'});
+ 
+     let jobId
+     let jobWarning
+@@ -615,6 +624,7 @@ export function createSubmitComfyVideo({
+         handoffReady,
+         releaseTimeoutMs,
+         handoffRetryIntervalMs,
++         llmHandoffMode,
+         now,
+         onGpuState,
+       })
+@@ -625,7 +635,7 @@ export function createSubmitComfyVideo({
+     let unload = { unloaded: false, runningModels: [] }
+     let warning
+     try {
+-      unload = await unloadLlamaSwap(
++      if(usesLlamaSwap)unload = await unloadLlamaSwap(
+         fetchImpl,
+         exec.signal,
+         sleep,
+@@ -635,7 +645,7 @@ export function createSubmitComfyVideo({
+     } catch (error) {
+       warning = `ComfyUI job was queued, but LLM unload failed: ${errorText(error)}`
+     } finally {
+-      onGpuState?.({prompt_id:queued.prompt_id,phase:jobId===undefined?'unmonitored':'generating',llm_unloaded:unload.unloaded,...(warning?{warning}:{})});
++      onGpuState?.({prompt_id:queued.prompt_id,phase:jobId===undefined?'unmonitored':'generating',llm_handoff_mode:llmHandoffMode,...(usesLlamaSwap?{llm_unloaded:unload.unloaded}:{llm_external:true}),...(warning?{warning}:{})});
+       try { exec.concludeTurn() } finally { resolveHandoff() }
+     }
+ 
+@@ -643,8 +653,8 @@ export function createSubmitComfyVideo({
+       prompt_id: queued.prompt_id,
+       ...(jobId !== undefined ? { job_id: jobId } : {}),
+       ...(queued.number !== undefined ? { number: queued.number } : {}),
+-      llm_unloaded: unload.unloaded,
+-      running_models: unload.runningModels,
++      llm_handoff_mode: llmHandoffMode,
++      ...(usesLlamaSwap?{llm_unloaded:unload.unloaded,running_models:unload.runningModels}:{llm_unload_skipped:true}),
+       ...((warning ?? jobWarning) !== undefined ? { warning: [jobWarning, warning].filter(Boolean).join(' ') } : {}),
+       terminal: true,
+       continuity,
+@@ -704,7 +714,7 @@ function toolDefinition({ startJob, toolName = 'submit_comfy_job', ...options }
+       isLegacyVideoName
+         ? 'Compatibility name for submit_comfy_job; submit exactly one prepared ComfyUI workflow as a managed background job.'
+         : 'Submit exactly one prepared ComfyUI API workflow for image, video, preprocessing, or another ComfyUI task as a managed background job.',
+-      'Managed Director productions use this for completion monitoring, llama-swap handoff and turn conclusion. Standalone workflow debugging and ordinary coding retain native Harness tools.',
++      'Managed Director productions use this for completion monitoring, configured LLM handoff and turn conclusion. llama-swap mode unloads a shared-GPU LLM and verifies VRAM release; comfy-only mode treats the LLM as external, skips llama-swap and ComfyUI cleanup handoff, and settles on terminal ComfyUI history. Standalone workflow debugging and ordinary coding retain native Harness tools.',
+       'Planning comes first: use director_workflows inspect for capability, dimensions and timing; show a shot/ref card and wait for user confirmation before writing its final H3 prompt. H3 validation/submission requires card_id and clip_id from that approved card. Do not manufacture a final prompt just to plan or obtain approval.',
+       'Reuse a previously verified workflow for the same task unless the user requests a change or its capabilities no longer fit. Check only relevant installed nodes/models when needed; do not print full object_info responses or perform recursive filesystem model searches when a targeted query answers the check.',
+       `For fresh-H3 timing-only planning, run node ${H3_TIMING_SHELL_PATH} --shots 5.5,3 (repeat --shots per clip). This offline helper computes 24-fps shot boundaries and 17k+5 clip lengths; no workflow/creative-guide lookup is needed for that calculation. Review its actual durations before approval. It does not rewrite workflows or handle latent-context overlap.`,
+@@ -718,7 +728,7 @@ function toolDefinition({ startJob, toolName = 'submit_comfy_job', ...options }
+       'A failed background job is terminal for that submission. Never retry an identical failed workflow automatically; inspect the error and change the workflow before submitting again.',
+       'After completion, use job output_artifacts and its ComfyUI view_url to retrieve outputs for review. For a loopback view_url, download it to the workspace with a shell HTTP client such as PowerShell Invoke-WebRequest or curl, then inspect that exact file; never use web_fetch for localhost and do not search entire drives.',
+       'This tool concludes the turn after an accepted submission.',
+-      'Monitoring waits for verified GPU release before waking the Agent. waiting_for_vram means handoff, not new generation: inspect job_output, never resubmit a completed/failed prompt.',
++      'llama-swap monitoring waits for verified GPU release before waking the Agent. In comfy-only mode terminal ComfyUI history is sufficient and no waiting_for_vram cleanup state is emitted. When waiting_for_vram does occur, it means handoff, not new generation: inspect job_output, never resubmit a completed/failed prompt.',
+       'Use validate_only=true before submission. Check submission_ready and issues/submission_blockers; validation never queues, unloads or ends the turn. status=blocked is an actionable prerequisite, not a failed generation. retry_identical=false means repair its cause or wait for confirmation; never retry the same arguments or re-create an unchanged card to clear it.',
+       'For dependent H3 clips prefer compatible saved sampler latent Motion Context. A previous clip video can also supply consecutive context_frames (video_frames), plus context_audio when supported; this multi-frame motion history is different from extracting one tail frame as a Picture or guide. Set continuity_requirement to the inspected route (sampler_latent or video_frames) on validation and submission; never label video_frames as original sampler latent. Honor an explicit saved-latent requirement and report missing latent before proposing a rerender. Verify source, conditioning-to-sampler wiring, trim and output; a MotionContext node alone is not proof of continuation. Put the actual workflow path, route and source on the review card before approval. Independent I2V/FLF workflows remain available.',
+       'Provide exactly one of workflow_path or workflow. Raw node graphs and {prompt: ...} wrappers are accepted.',
+@@ -771,8 +781,10 @@ function toolDefinition({ startJob, toolName = 'submit_comfy_job', ...options }
+           ...h3CanvasLines(value),
+           `Continuity route: ${value.continuity.mode}. ${value.continuity.explanation}`,
+           ...(value.h3_effective_prompt?[`Effective H3 prompt (${value.h3_effective_prompt.source}, SHA256 ${value.h3_effective_prompt.sha256}): ${value.h3_effective_prompt.summary}`]:[]),
+-          ...(value.job_id ? [`Harness background job: ${value.job_id}. Completion will wake this Agent for review only after verified GPU handoff; unverified release keeps the job waiting with saved outputs readable via job_output.`] : []),
+-          value.llm_unloaded
++          ...(value.job_id ? [`Harness background job: ${value.job_id}. ${value.llm_handoff_mode==='comfy-only'?'Terminal ComfyUI history wakes this Agent for review; no VRAM cleanup handoff is required.':'Completion will wake this Agent for review only after verified GPU handoff; unverified release keeps the job waiting with saved outputs readable via job_output.'}`] : []),
++          value.llm_handoff_mode==='comfy-only'
++            ? 'External-LLM mode; llama-swap unload skipped and Harness turn concluded.'
++            : value.llm_unloaded
+             ? 'llama-swap model unloaded; Harness turn concluded.'
+             : 'Harness turn concluded, but llama-swap unload needs attention.',
+         ]
+diff --git a/test/config.test.mjs b/test/config.test.mjs
+index 401d892..48a5864 100644
+--- a/test/config.test.mjs
++++ b/test/config.test.mjs
+@@ -12,6 +12,15 @@ test('configured Comfy and swap origins own every network request',async()=>{
+   await submit({workflow:{1:{class_type:'Test',inputs:{}}}},{concludeTurn(){}});
+   assert.deepEqual(urls,['http://comfy.example:8000/prompt','http://swap.example:9000/api/models/unload','http://swap.example:9000/running']);
+ });
++test('comfy-only handoff never resolves or contacts a llama-swap origin',async()=>{
++  const urls=[];let concluded=0;
++  const submit=createSubmitComfyVideo({comfyBaseUrl:'http://comfy.example:8000',llamaSwapBaseUrl:'not a URL',llmHandoffMode:'comfy-only',startJob:()=> 'j',fetchImpl:async u=>{
++    urls.push(String(u));return Response.json({prompt_id:'p'});
++  }});
++  const result=await submit({workflow:{1:{class_type:'Test',inputs:{}}}},{concludeTurn(){concluded++;}});
++  assert.deepEqual(urls,['http://comfy.example:8000/prompt']);
++  assert.equal(result.llm_handoff_mode,'comfy-only');assert.equal(result.llm_unload_skipped,true);assert.equal('llm_unloaded' in result,false);assert.equal(concluded,1);
++});
+ test('service redirects cannot forward workflow bytes to another origin',async t=>{
+   let forwarded=0;
+   const target=createServer((req,res)=>{forwarded++;res.setHeader('Content-Type','application/json');res.end(JSON.stringify({prompt_id:'unrelated'}));});
+diff --git a/test/director-ui.test.mjs b/test/director-ui.test.mjs
+index 9b87466..de75b8f 100644
+--- a/test/director-ui.test.mjs
++++ b/test/director-ui.test.mjs
+@@ -220,6 +220,21 @@ test('GPU status keeps editable draft, disables only Send and restores sending a
+   await act(()=>document.querySelector('[data-send]').click());assert.equal(sent,1);
+ });
+ 
++test('comfy-only GPU status never blocks native Send or offers manual recovery',async t=>{
++  const GpuStatus=await component('src/client/GpuStatus.jsx','GpuStatus');
++  let status={phase:'generating',blocked:true,llm:'external'},releaseCalls=0,sent=0;
++  const shell={submit(){sent++;}};
++  await render(t,GpuStatus,{shell,connection:connected,readStatus:async()=>status,releaseMemory:async()=>{releaseCalls++;},pollMs:10});
++  await act(()=>new Promise(r=>setTimeout(r,20)));assert.match(document.querySelector('[role="status"]').textContent,/External LLM.*ComfyUI generating/);
++  await act(()=>shell.submit());await act(()=>new Promise(r=>setTimeout(r,0)));assert.equal(sent,1);
++  status={phase:'releasing_vram',blocked:true,llm:'external'};await act(()=>new Promise(r=>setTimeout(r,20)));
++  assert.equal(document.querySelector('[data-action="release-comfy-vram"]'),null);
++  assert.doesNotMatch(document.querySelector('[role="status"]').textContent,/Release ComfyUI memory/);
++  assert.equal(releaseCalls,0);
++  status={phase:'ready',blocked:false,llm:'external'};await act(()=>new Promise(r=>setTimeout(r,20)));
++  await act(()=>shell.submit());await act(()=>new Promise(r=>setTimeout(r,0)));assert.equal(sent,2);
++});
++
+ test('idle VRAM block offers manual recovery without sending or clearing the draft',async t=>{
+   const GpuStatus=await component('src/client/GpuStatus.jsx','GpuStatus');
+   let status={phase:'releasing_vram',blocked:true,llm:'unloaded'},released=0,sent=0;
+diff --git a/test/gpu-status.test.mjs b/test/gpu-status.test.mjs
+index 0501398..6581c2d 100644
+--- a/test/gpu-status.test.mjs
++++ b/test/gpu-status.test.mjs
+@@ -2,7 +2,7 @@ import test from 'node:test';
+ import assert from 'node:assert/strict';
+ import {createServer} from 'node:http';
+ 
+-const GiB=1024**3;
++const MiB=1024**2,GiB=1024**3;
+ async function fixture(){
+   const mod=await import('../src/gpu-status.mjs').catch(e=>{if(e.code==='ERR_MODULE_NOT_FOUND')return {};throw e;});
+   assert.equal(typeof mod.createGpuStatus,'function','live GPU status must exist');
+@@ -15,6 +15,22 @@ test('live queue blocks sending and reports actual unloaded LLM without model ca
+   const s=await f.status.snapshot();assert.equal(s.blocked,true);assert.equal(s.phase,'generating');assert.equal(s.llm,'unloaded');
+   assert.deepEqual(f.calls.sort(),['/queue','/running','/system_stats']);
+ });
++test('comfy-only status skips VRAM release gating and llama-swap evidence',async()=>{
++  const {createGpuStatus}=await import('../src/gpu-status.mjs');
++  const remote={queue:{queue_running:[[0,'p']],queue_pending:[]},stats:{devices:[{type:'cuda',vram_total:24*GiB,vram_free:23*GiB,torch_vram_total:0,torch_vram_free:0}]}};const calls=[];
++  const status=createGpuStatus({llmHandoffMode:'comfy-only',llamaSwapBaseUrl:'not a URL',fetchImpl:async(url,init={})=>{
++    const path=new URL(url).pathname;calls.push({path,method:init.method??'GET'});
++    if(path==='/queue')return Response.json(remote.queue);
++    if(path==='/system_stats')return Response.json(remote.stats);
++    if(path==='/free'){remote.stats.devices[0].vram_free=23*GiB;remote.stats.devices[0].torch_vram_total=0;remote.stats.devices[0].torch_vram_free=0;return Response.json({});}
++    throw Error(`Unexpected ${path}`);
++  }});
++  let value=await status.snapshot();assert.equal(value.phase,'generating');assert.equal(value.blocked,true);assert.equal(value.llm,'external');
++  remote.queue.queue_running=[];value=await status.snapshot();assert.equal(value.phase,'ready');assert.equal(value.blocked,false);assert.equal(value.llm,'external');
++  remote.stats.devices[0].vram_free=17*GiB;remote.stats.devices[0].torch_vram_total=96*MiB;remote.stats.devices[0].torch_vram_free=80*MiB;
++  const releaseState=await status.snapshot();assert.equal(releaseState.phase,'ready');assert.equal(releaseState.blocked,false);assert.equal(releaseState.llm,'external');assert.equal((await status.recover()).phase,'ready');
++  assert.equal(calls.some(call=>call.path==='/running'),false);assert.equal(calls.some(call=>call.path==='/free'),false);
++});
+ test('managed GPU handoff remains blocked until verified release, including failed video runs',async()=>{
+   const f=await fixture();f.status.update({prompt_id:'p',phase:'waiting_for_vram',execution_status:'failed'});
+   assert.equal((await f.status.snapshot()).phase,'releasing_vram');
+diff --git a/test/handoff.test.mjs b/test/handoff.test.mjs
+index 22155cc..1225a5d 100644
+--- a/test/handoff.test.mjs
++++ b/test/handoff.test.mjs
+@@ -9,10 +9,11 @@ function stats(free = 23 * GiB, reserved = 0) {
+   return {devices: [{name: 'cuda:0', type: 'cuda', index: 0, vram_total: 24 * GiB,
+     vram_free: free, torch_vram_total: reserved, torch_vram_free: 0}]}
+ }
+-async function run({history, queue = () => idle, memory = () => stats(), freeStatus = 200} = {}) {
++async function run({history, queue = () => idle, memory = () => stats(), freeStatus = 200, llmHandoffMode = 'llama-swap'} = {}) {
+   let hooks, clock = 0
+   const calls = []
+   const submit = createSubmitComfyVideo({
++    llmHandoffMode,
+     startJob(spec) {hooks = spec.run(); return 'j'},
+     now: () => clock, releaseTimeoutMs: 5, historyPollIntervalMs: 1, handoffRetryIntervalMs: 1,
+     sleep: async ms => {clock += ms},
+@@ -55,6 +56,15 @@ test('completion waits for idle queue and actual VRAM headroom, not just /free 2
+   assert.equal(calls.some(c => c.path === '/interrupt'), false)
+ })
+ 
++test('comfy-only completion skips memory release verification and settles at terminal history', async () => {
++  const {outcome, calls} = await run({llmHandoffMode: 'comfy-only'})
++  assert.equal(outcome.status, 'completed')
++  const result = JSON.parse(outcome.output)
++  assert.deepEqual(result.comfy_release, {skipped: true, reason: 'external_llm'})
++  assert.equal(calls.some(call => call.path === '/free'), false)
++  assert.equal(calls.some(call => call.path === '/system_stats'), false)
++})
++
+ test('a failed Comfy execution also releases memory before settling', async () => {
+   const {outcome, calls} = await run({history: {
+     status: {completed: false, status_str: 'error', messages: [['execution_error', {exception_message: 'CUDA OOM'}]]}, outputs: {},
+diff --git a/test/image-staging.test.mjs b/test/image-staging.test.mjs
+index fce950a..ee3fbc7 100644
+--- a/test/image-staging.test.mjs
++++ b/test/image-staging.test.mjs
+@@ -128,10 +128,11 @@ test('a saved binding from another ComfyUI origin is never reused as current end
+   const value=await second.execute({source_paths:[f.path]},f.exec);assert.equal(value.images[0].reused,false);assert.equal(uploaded,1);
+ });
+ 
+-test('internal workspace junctions are rejected before contacting ComfyUI',async()=>{
++test('internal workspace junctions stage their canonical image bytes',async()=>{
+   const f=await fixture(),link=join(f.cwd,'alias');await symlink(f.cwd,link,'junction');
+-  await assert.rejects(f.tool.execute({source_paths:[join(link,'actor.png')]},f.exec),/link|junction/i);
+-  assert.equal(f.requests.length,0);
++  const source=join(link,'actor.png'),result=await f.tool.execute({source_paths:[source]},f.exec);
++  assert.equal(result.images[0].source_path,source);assert.equal(result.images[0].sha256,createHash('sha256').update(png).digest('hex'));
++  assert.deepEqual(f.uploads[0].bytes,png);
+ });
+ 
+ test('cancellation during final remote verification cannot publish a successful binding',async()=>{
+diff --git a/test/media-store.test.mjs b/test/media-store.test.mjs
+index 271a8a5..b700cf9 100644
+--- a/test/media-store.test.mjs
++++ b/test/media-store.test.mjs
+@@ -107,7 +107,23 @@ test('signature mismatch, URLs, symlink escape, unmapped backend and cancellatio
+   const c=new AbortController();c.abort();await assert.rejects(f.store.register({...f.input,signal:c.signal}));
+ });
+ 
+-test('internal workspace junctions cannot become gallery source files',async()=>{
++test('internal workspace junctions resolve to their canonical gallery source files',async()=>{
+   const f=await fixture(),link=join(f.cwd,'alias');await symlink(f.cwd,link,'junction');
+-  await assert.rejects(f.store.register({...f.input,path:join(link,'a.png')}),/link|junction/i);
++  const item=await f.store.register({...f.input,path:join(link,'a.png')});
++  assert.equal(item.source,f.path);assert.equal(item.sha256,(await f.store.lookup(item.id,'session-test')).sha256);
++  const opened=await f.store.openOriginal(item.id,'session-test');assert.equal(opened.source,f.path);await opened.handle.close();
++});
++
++test('gallery snapshots open through a configured symlinked media root',async()=>{
++  const f=await fixture(),actual=join(f.root,'media'),alias=join(f.root,'media-alias');
++  await mkdir(actual);await symlink(actual,alias,'junction');
++  const {createMediaStore}=await import('../src/media-store.mjs'),store=createMediaStore({root:alias});
++  const item=await store.register(f.input),opened=await store.openForPlayback(item.id,'session-test');
++  try{assert.deepEqual(await opened.handle.readFile(),png);}finally{await opened.handle.close();}
++});
++
++test('gallery playback refuses a snapshot replaced by a symlink',async()=>{
++  const f=await fixture(),item=await f.store.register(f.input),snapshot=join(f.root,'media',item.id+'.bin');
++  await unlink(snapshot);await symlink(f.path,snapshot,'file');
++  await assert.rejects(f.store.openForPlayback(item.id,'session-test'),/stored media changed/i);
+ });
+diff --git a/test/send-protection.test.mjs b/test/send-protection.test.mjs
+index 13b73cd..83b4717 100644
+--- a/test/send-protection.test.mjs
++++ b/test/send-protection.test.mjs
+@@ -31,6 +31,14 @@ test('two mounted views share protection and either disposal order restores nati
+   }
+ });
+ 
++test('external LLM activity never blocks native send but a lost connection still does',async()=>{
++  const protect=await guard();let calls=0;const shell={submit(){calls++;}};
++  const dispose=protect(shell,{check:async()=>({phase:'generating',blocked:true,llm:'external',connection_blocked:false}),onBlocked(){}});
++  shell.submit();await flush();assert.equal(calls,1);dispose();
++  const remove=protect(shell,{check:async()=>({phase:'generating',blocked:true,llm:'external',connection_blocked:true}),onBlocked(){}});
++  shell.submit();await flush();assert.equal(calls,1);remove();
++});
++
+ test('an unavailable optional GPU service does not block a send explicitly cleared by the status owner',async()=>{
+   const protect=await guard();let calls=0;const shell={submit(){calls++;}};
+   const dispose=protect(shell,{check:async()=>({phase:'unknown',blocked:false}),onBlocked(){}});

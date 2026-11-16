@@ -1,0 +1,5 @@
+# The Host owns the switch endpoint; the client injects its header control.
+- insert:
+    - id: dsh-session-agent-preset
+      name: '@local/dsh-session-agent-preset'
+      config: {}

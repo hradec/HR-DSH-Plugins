@@ -1,0 +1,6 @@
+# dsh-session-mover: one Host remote (sessionMover/move) plus the Web client
+# half declared in package.json. Enabling this bundle is what loads both.
+- insert:
+    - id: dsh-session-mover
+      name: '@local/dsh-session-mover'
+      config: {}

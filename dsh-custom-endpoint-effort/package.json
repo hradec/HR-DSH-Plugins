@@ -1,0 +1,20 @@
+{
+  "name": "@local/dsh-custom-endpoint-effort",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Reads each custom llm-pi-ai endpoint's own model listing on demand and keeps per-model reasoningEfforts in sync",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js"
+  },
+  "files": ["index.js", "client.js", "cordis.patch.yml"],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-client-ui-model-selection"]
+    }
+  }
+}

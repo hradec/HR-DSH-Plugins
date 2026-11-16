@@ -1,0 +1,36 @@
+{
+  "name": "@local/dsh-session-mover",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Drag a session row onto another sidebar folder to move it: a full-history copy is recorded under the target directory and the original is archived.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "session",
+    "workspace",
+    "drag-and-drop"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}

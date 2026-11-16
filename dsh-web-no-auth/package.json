@@ -1,0 +1,23 @@
+{
+  "name": "@local/dsh-web-no-auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Explicitly disables all DSH Web browser authentication for a trusted isolated network.",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "regex-patches.js",
+    "ipad-compat.js",
+    "legacy-assets.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Input History",
+    "description": "Shell-style history in the chat box: press Up to bring back previously sent text and Down to step forward, read from the Session transcript."
+  }
+}

@@ -1,0 +1,3 @@
+- insert:
+    - id: minimax-session-importer
+      name: '@local/minimax-session-importer'

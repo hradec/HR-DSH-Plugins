@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "MiniMax Session Importer",
+    "description": "Browse local MiniMax Code sessions and import selected conversations as new DSH sessions."
+  }
+}

@@ -1,0 +1,6 @@
+# This Loader row declares the client bundle and mounts the Host half, which
+# owns the shared color store in ~/.dsh/session-colors.json.
+- insert:
+    - id: dsh-session-colors
+      name: '@local/dsh-session-colors'
+      config: {}

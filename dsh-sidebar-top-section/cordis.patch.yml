@@ -1,0 +1,5 @@
+# The Host row is intentionally empty: this plugin only changes the Web sidebar.
+- insert:
+    - id: dsh-sidebar-top-section
+      name: '@local/dsh-sidebar-top-section'
+      config: {}

@@ -1,0 +1,4 @@
+- insert:
+    - id: dsh-statusline-host
+      name: '@local/dsh-statusline'
+      config: {}

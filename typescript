@@ -1,0 +1,27 @@
+Script started on 2026-10-30 00:38:28-07:00 [COMMAND="node -e "const w=require('/home/rhradec/.dsh/storages/workspace.json');const id='session-74d6dc8f-acb8-48f7-96ed-3e4b3354f42f';const ms=Object.entries(w.tables.workspaces).filter(([,v])=>v.sessionIds?.includes(id)).map(([k,v])=>({id:k,path:v.path,title:v.title,updatedAt:v.updatedAt}));console.log(JSON.stringify({found:ms,archived:w.global.archivedSessionIds.includes(id),workspaceIds:w.global.workspaceIds.length,dirTitles:Object.entries(w.tables.workspaces).map(([k,v])=>v.path),mtime:require('fs').statSync('/home/rhradec/.dsh/storages/workspace.json').mtime},null,2))"" <not executed on terminal>]
+{
+  "found": [
+    {
+      "id": "7aa5a180-9755-47c5-b957-39bb82315fc5",
+      "path": "/BACKUP/home/rhradec/.minimax",
+      "title": ".minimax",
+      "updatedAt": "2026-10-24T02:57:25.018Z"
+    }
+  ],
+  "archived": false,
+  "workspaceIds": 9,
+  "dirTitles": [
+    "/BACKUP/home/rhradec",
+    "/net/192.168.10.52/ST20TB/dev/xcode-13-acesso/asesso-github/0.RND/multiple-photos",
+    "/BACKUP/home/rhradec/.dsh/custom-plugins",
+    "/BACKUP/home/rhradec/.minimax",
+    "/net/192.168.10.52/ST20TB/dev/xcode-13-acesso/asesso-github/0.RND/multiple-photos/submodules/da3-lora",
+    "/net/192.168.10.52/ST20TB/dev/xcode-13-acesso/asesso-github/0.RND/multiple-photos/submodules/da3_lora_1100_recipe",
+    "/net/192.168.10.52/ST20TB/dev/xcode-13-acesso/asesso-github",
+    "/net/192.168.10.52/RAID/atomo/home/rhradec/Videos/ai-production",
+    "/net/192.168.10.52/ST20TB/dev/xcode-13-acesso/asesso-github/0.RND/multiple-photos/submodules/da3"
+  ],
+  "mtime": "2026-10-30T07:29:24.622Z"
+}
+
+Script done on 2026-10-30 00:38:28-07:00 [COMMAND_EXIT_CODE="0"]
