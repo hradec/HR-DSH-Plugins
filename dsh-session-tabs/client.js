@@ -267,6 +267,16 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
     }
 
     /**
+     * Strip left offset: the sidebar column's width, with the macOS desktop
+     * clearance while that column is hidden.
+     */
+    function stripLeft(insetLeft) {
+      const darwin = typeof document !== 'undefined'
+        && document.documentElement.getAttribute('data-platform') === 'darwin'
+      return darwin && insetLeft < 100 ? 160 : insetLeft
+    }
+
+    /**
      * The tab strip. Standard props come from the slot outlet; the two
      * navigation callbacks are supplied by `apply` from `ctx.uiWorkspace`.
      */
@@ -299,7 +309,6 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
       const [dragOrder, setDragOrder] = React.useState(null)
       const [sidebarOrder, setSidebarOrder] = React.useState(EMPTY)
       const [insets, setInsets] = React.useState({ left: 0, right: 0 })
-      const [hidden, setHidden] = React.useState(false)
       // Bumped when the optional color plugin announces a color change.
       const [, setColorRevision] = React.useState(0)
 
@@ -411,18 +420,40 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
         const previousPadding = center.style.paddingTop
         center.style.paddingTop = `${BAR_HEIGHT}px`
 
+        // The right panel (normal AND fullscreen) is a position:absolute sheet
+        // pinned at the column top; park it under the strip so the tabs span
+        // the full width and never lose space to the panel header (user:
+        // "when NOT IN FULLSCREEN, it's still covering the tabs"). The hashed
+        // CSS-module class prefix is matched by suffix.
+        let parkedPanel = null
+        const findParkedPanel = () => {
+          if (rightbar === null || rightbar === undefined) return null
+          for (const node of rightbar.querySelectorAll('[class]')) {
+            const tokens = typeof node.className === 'string' ? node.className.split(' ') : []
+            if (tokens.some((token) => token.endsWith('_panel'))) return node
+          }
+          return null
+        }
+
         const update = () => {
-          const sidebarWidth = sidebar.getBoundingClientRect().width
-          const rightbarWidth = Math.max(
-            rightbar?.getBoundingClientRect().width ?? 0,
-            rightbar?.firstElementChild?.getBoundingClientRect().width ?? 0,
-          )
+          const fullscreen = frame.hasAttribute('data-rightbar-fullscreen')
+          if (parkedPanel === null || !parkedPanel.isConnected) parkedPanel = findParkedPanel()
+          if (parkedPanel !== null) parkedPanel.style.top = `${BAR_HEIGHT}px`
+          const sidebarWidth = fullscreen ? 0 : sidebar.getBoundingClientRect().width
+          // ponytail: write the strip's offsets on the same frame the column
+          // moved. The React insets state only seeds the first render; a React
+          // commit lags the column animation by a frame and the strip then
+          // overlaps the opening sidebar (user-reported collision).
+          const bar = document.querySelector('[data-dsh-session-tabs]')
+          if (bar !== null) {
+            bar.style.left = `${stripLeft(sidebarWidth)}px`
+            bar.style.right = '0px'
+          }
           setInsets((previous) => (
-            previous.left === sidebarWidth && previous.right === rightbarWidth
+            previous.left === sidebarWidth && previous.right === 0
               ? previous
-              : { left: sidebarWidth, right: rightbarWidth }
+              : { left: sidebarWidth, right: 0 }
           ))
-          setHidden(frame.hasAttribute('data-rightbar-fullscreen'))
         }
 
         update()
@@ -465,6 +496,7 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
           if (orderFrame !== 0) window.cancelAnimationFrame(orderFrame)
           window.removeEventListener('resize', update)
           center.style.paddingTop = previousPadding
+          if (parkedPanel !== null && parkedPanel.isConnected) parkedPanel.style.top = ''
         }
       }, [])
 
@@ -573,11 +605,7 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
         setDrop(null)
       }
 
-      if (hidden) return null
-
-      const darwin = typeof document !== 'undefined'
-        && document.documentElement.getAttribute('data-platform') === 'darwin'
-      const left = darwin && insets.left < 100 ? 160 : insets.left
+      const left = stripLeft(insets.left)
 
       const tabs = visibleIds.map((id) => {
         const row = byId[id]

@@ -1222,3 +1222,45 @@ RESTART DONE 2026-11-15 02:29:39 MST: USER ORDER "restart now!" → detached uni
 - 'router API error (400) … context_length_exceeded … leaves no room to answer' → resumeErrorPattern += 'context_length_exceeded|leaves no room to answer'. Caveat stated to user: retry only helps once DSH compacts on the new request; if still oversized the failure is deterministic and the 3/boot budget absorbs it.
 - LIVE PROOF at deploy: 'session tab plugin' (7104a131, this workspace) stuck since ~10:55 with exactly this error; v8 boot scan continued 11:58:43; re-errored 11:58:55; watcher retry #2 running open-turn by 12:00 (2 attempts used, 1 left in fiber budget). Two older 503 tails (273h/570h: 'are you there?', 'can you run a shell') correctly skipped by maxAge 72h.
 - Ceilings kept: context-overflow retry may loop up to budget if compaction never lands; untagged argument-less fake calls missed; quoted pair containing inner tags counts.
+
+## 0.2.50 — Footage task queue, fixed toolbar/scroll frame, selection+trash delete, Import dialog (2026-11-16, commit 235dfac)
+- FootageBoard.jsx: runTask FIFO queue (queueRef chain) → toolbar chip "⏳ n tasks · label (progress)"; auto-tag pass + right-click re-tag + imports + delete all queued; selection Set state + .footage-pick checkbox per card + selbar (Select all filtered/Deselect/🗑 Delete selected); Import… opens .footage-dialog (path input + video/folder buttons) — toolbar input removed.
+- styles.css: #root/.dsh-director-studio-app:has(.footage-board) height 100%; .footage-board flex column overflow hidden; .footage-scroll own scroll frame; .footage-group-head sticky top:0 inside it; pick/selbar/tasks/dialog rules. Studio iframe body is height:100% overflow:auto (mountStudioFrame) — app fills it, header+toolbar never scroll.
+- studio-store.mjs: moveToTrash (XDG: $XDG_DATA_HOME??~/.local/share /Trash files+info, unique stem-N, trashinfo Path+DeleteTime, EXDEV→copy+rm); deleteFootage(rel) = trash + drop footage.json entry (change()-serialized).
+- studio-api.mjs: POST /api/footage/delete {paths:[…]} → results per path, per-path errors surfaced verbatim, batch continues.
+- test: fake XDG_DATA_HOME=trash-home in fixture; asserts trashed_to path, trashinfo content, file gone from media/ AND footage.json, missing path → "not found" row. 486/486 green (/tmp/codex/dsh-director-0250-test.log).
+- NO restart performed (user ban from 0.2.49 turn); server-side delete route activates at next restart — client chip/layout/selection appear after one HARD reload (bundle cached immutable, rev unchanged without restart).
+
+## dsh-session-tabs — strip no longer collides with the opening sidebar (2026-11-16, live via symlink, NO DSH restart)
+- User: "the left sidebar button is bellow the tabs, but when the sidebar opens, it opens over the tabs... it should open without covering the tabs."
+- Repro (steady state measured CLEAN first, so it was frame-level): rAF sampler in-page via selenium Firefox — sidebar column jumps 56→280 while strip left is still 56 for ~1 frame (t=50 side=280 bar=56, t=75 caught up) = ~25ms, longer under real load. Root cause: update() routed the strip offset through setInsets → React commit lagged the grid animation one frame; the strip (z40, fixed) then intrudes over the opened sidebar region (logs /tmp/codex/tabs-sidebar-ffprobe4.log BEFORE: 1 overlap frame at 900px AND 1440px).
+- Fix (dsh-session-tabs/client.js only): update() also writes bar.style.left/right directly in the RO/MO/resize callback (same frame the column moves, React never on the hot path); setInsets kept only to seed the first render; darwin clearance rule <100→160 unified into module helper stripLeft() shared by render + update. No gates, no behavior change otherwise (colors/order/status untouched).
+- Verified AFTER (new browser profile, fresh bundle): 0 overlap frames opening the sidebar at 900 and 1440 (ffprobe5-patched log); right-panel-open state exact: grid 280/512/648 → strip x=280 w=512, collapse → 56/736 in the same frame (ffprobe6 log). Puppeteer Chromium112 geometry agrees with Firefox ESR140.
+- Tooling facts: cached ~/.cache/puppeteer/chrome/linux-1108766 (Chromium 112) lost its +x bit — chmod +x restored; puppeteer 1.20 bundled chromium r686378 (Chrome 78) cannot run the GUI (optional chaining SyntaxError); Firefox remote agent speaks BiDi only (no /json CDP) → selenium 4.52 installed --user for FF automation. Probe scripts live in /tmp/dsh-tabs-sidebar-test/ (probe.js probe2.js ffprobe.py ffprobe3.py ffprobe4.py).
+- User side: plugin is symlinked + served from disk per request → ONE normal reload picks it up; hard reload if the old immutable rev is still cached (0.2.48 gotcha).
+
+## 0.2.51 — group box cosmetic: sticky title keeps the rounded border (2026-11-16, commit 35f5174)
+- .footage-group lost its own border/bg; head = sticky rounded TOP box (border, radius 10 10 0 0, bg color-mix text 3% over var(--bg) — same wash as page, no blur), new .footage-group-body = rounded BOTTOM box the clips scroll under (JSX wrapper added). One hard reload activates (no dsh restart).
+
+## 0.2.52 — sticky-head corner notch hairline (2026-11-16, commit 3441e6f)
+- ::before underlay behind pinned title fills the rounded-corner notch; body side border no longer peeks out. CSS only, hard reload activates.
+
+### round 15 (2026-11-16) — RIGHT panel Fullscreen was the real "sidebar over the whole canvas incl. tabs"
+- Two live servers: user browser uses :3080 (systemd socket-activated harness), this session on :3081 (manual dsh web). Same installed runtime + symlinked plugins → one client.js fix serves both after reload.
+- Screenshots showed aligned settled geometry; console.table from user browser confirmed bar x=sidebar width (no steady overlap). Frame rAF probe found 1 lag frame before the earlier sync-write fix; after it 0 frames (both ports, ffprobe4_3080 log).
+- REAL DEFECT found by probing right-panel "Fullscreen" button: core dsh-client-ui-sidebar-right goes position:absolute full-frame (x0 w=full, top0) covering sidebar+canvas+tab band, AND our own plugin additionally hid the strip via setHidden(data-rightbar-fullscreen) → tabs vanish = user symptom.
+- Fix (dsh-session-tabs/client.js): dropped hidden state/guard entirely (tabs never hidden); on data-rightbar-fullscreen insets→0 and the full-bleed panel (found by *_panel class-suffix scan, hashed prefix-agnostic) parked at top=BAR_HEIGHT (restored on exit and on unmount).
+- Verified headless both ports: in-fs bar x0 w1440 visible, panel y=34 with its Start header + Exit-fullscreen buttons fully clickable; exit restores bar x=280/right-inset normal; sidebar-open overlap regression probe still 0 frames. Logs: /tmp/codex/tabs-sidebar-fs-fix-verify.log, tabs-sidebar-regression-after-fsfix.log, shot-fs-3081.png.
+- NOTE: P3OORG_* hashed class may change on DSH upgrade; plugin re-locates the panel by *_panel suffix every fullscreen enter, and simply no-ops if absent.
+
+## 0.2.53 — underlay regression (2026-11-16, commit 35f… no: 0.2.53)
+- Absolute ::before paints ABOVE static text/buttons (step 8) — title vanished in 0.2.52; z-index:-1 keeps it behind the head but above the scrolling body (head is its own stacking context via z-index:3).
+
+### round 16 (2026-11-16) — FINAL: strip spans full width even in NORMAL right-panel mode (user: working now!)
+- User red-box screenshot: not-fullscreen right panel kept its own header in the tab band while the strip stopped at the panel edge = still covering the tabs.
+- client.js final shape: right inset ALWAYS 0; the right panel sheet (normal + fullscreen) parked at top=BAR_HEIGHT whenever present (findParkedPanel *_panel suffix scan, re-found when detached); rightbarWidth math removed; hidden state already gone (round 15).
+- Verified :3080+:3081 headless: right-open bar x280 w1160 to viewport edge, panel y=34, Collapse-right-sidebar button at y=44 (clickable); fs bar x0 w1440; exit restores. Log: /tmp/codex/tabs-sidebar-rbnormal-fix-verify.log, shot-rb-normal-3081.png.
+- Pending: user asked to confirm commit (client.js + work-memory.md only; dsh-director gitlink stays out).
+
+## 0.2.54 — sticky head border approach redone (2026-11-16, commit see git)
+- Root cause of 0.2.52/53 regressions: descendants (even z-index:-1) paint AFTER the root box background AND border → any underlay eats the head border. Final form: head = square opaque wash (hides notch), ::before = transparent rounded border overlay (positioned, paints above wash, only ring at edges, pointer-events none). Head must NOT have border-radius (it would clip the wash back to the notch).
