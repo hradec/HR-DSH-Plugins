@@ -62,9 +62,9 @@ export const PATCHES = [
     id: '@deepseek-ai/dsh-client-ui-layout',
     edits: [
       ['\t\t\tconst s = sidebar === 0 ? collapsedWidth : clampWidth(sidebar, 264, 420);', '\t\t\tconst s = sidebar === 0 ? collapsedWidth : clampWidth(sidebar, 0, 1e9);', 1],
-      ['\t\t\t\t\t\td.layoutInfo.sidebar = clampWidth(px, 264, 420);', '\t\t\t\t\t\td.layoutInfo.sidebar = clampWidth(px, 0, 1e9);\n\t\t\t\t\t\tlocalStorage.setItem("dsh.sidebarWidth", String(d.layoutInfo.sidebar));', 1],
-      ['\t\t\t\t\t\tsidebar: 280,', '\t\t\t\t\t\tsidebar: Number(localStorage.getItem("dsh.sidebarWidth")) || 280,', 1],
-      ['\t\t\t\t\t\telse d.layoutInfo.sidebar = d.layoutInfo.sidebar === 0 ? 280 : 0;', '\t\t\t\t\t\telse d.layoutInfo.sidebar = d.layoutInfo.sidebar === 0 ? (Number(localStorage.getItem("dsh.sidebarWidth")) || 280) : 0;', 1],
+      ['\t\t\t\t\t\td.layoutInfo.sidebar = clampWidth(px, 264, 420);', '\t\t\t\t\t\td.layoutInfo.sidebar = clampWidth(px, 0, 1e9);\n\t\t\t\t\t\tlocalStorage.setItem("dsh.sidebarWidth", String(d.layoutInfo.sidebar));\n\t\t\t\t\t\tlocalStorage.setItem("dsh.sidebarCollapsed", "0");', 1],
+      ['\t\t\t\t\t\tsidebar: 280,', '\t\t\t\t\t\tsidebar: localStorage.getItem("dsh.sidebarCollapsed") === "1" ? 0 : (Number(localStorage.getItem("dsh.sidebarWidth")) || 280),', 1],
+      ['\t\t\t\t\t\telse d.layoutInfo.sidebar = d.layoutInfo.sidebar === 0 ? 280 : 0;', '\t\t\t\t\t\telse d.layoutInfo.sidebar = d.layoutInfo.sidebar === 0 ? (Number(localStorage.getItem("dsh.sidebarWidth")) || 280) : 0;\n\t\t\t\t\t\tlocalStorage.setItem("dsh.sidebarCollapsed", d.layoutInfo.sidebar === 0 ? "1" : "0");', 1],
       ['\t\t\tconst available = viewport - s - 400;', '\t\t\tconst available = viewport - s;', 1],
       ['\t\t\tconst r = rightbar === 0 || available < 300 ? 0 : Math.min(available, clampWidth(rightbar, 300, viewport * RIGHTBAR_MAX_RATIO));', '\t\t\tconst r = rightbar === 0 || available <= 0 ? 0 : Math.min(available, clampWidth(rightbar, 0, Number.MAX_SAFE_INTEGER));', 1],
       ['\t\t\tconst rightbarMax = cols.rightbar === 0 ? 0 : clampWidth(rightbarPreference, 300, viewport * RIGHTBAR_MAX_RATIO);', '\t\t\tconst rightbarMax = cols.rightbar === 0 ? 0 : clampWidth(rightbarPreference, 0, Number.MAX_SAFE_INTEGER);', 1],

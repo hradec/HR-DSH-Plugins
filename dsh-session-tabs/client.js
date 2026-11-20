@@ -35,6 +35,11 @@ window.__ModuleLoader__.load({
 
     const BAR_HEIGHT = 34
     const STORAGE_KEY = 'dsh-session-tabs.order.v1'
+    const SIDEBAR_STATE_KEY = 'dsh.sessionTabs.sidebarCollapsed.v1'
+    const readSidebarMap = () => {
+      const raw = localStorage.getItem(SIDEBAR_STATE_KEY)
+      return raw !== null && raw.startsWith('{') ? JSON.parse(raw) : {}
+    }
     const COLORS_EVENT = 'dsh-session-colors:change'
     const RUNTIME_API = '__dshSessionColors'
 
@@ -299,6 +304,13 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
       const byId = list?.byId ?? {}
       const current = currentSessionId(list)
 
+      // Per-tab sidebar hidden state (user: "store the sidebar side per tab,
+      // not one for all tabs"). activeIdRef keeps the layout effect's observer
+      // honest about WHICH session a toggle belongs to.
+      const activeIdRef = React.useRef(current)
+      activeIdRef.current = current
+      const drawerControlRef = React.useRef(null)
+
       const [order, setOrderState] = React.useState(() => {
         const saved = readOrder()
         if (saved.length > 0) return saved
@@ -444,21 +456,52 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
           return null
         }
 
-        let drawerOpen = false
+        // Commit-driven drawer state machine (2026-11-20): every transition
+        // waits for core's data-sidebar-collapsed commit instead of guessing
+        // with rAFs — timed guesses left drawer styles alive across commits
+        // (user: "left bar appears and I can see the sidebar sliding inside
+        // it"). States: closed | pending (clicked, commit not seen) | open |
+        // undo (pending-open aborted) | anim-close (slid out, collapse click
+        // pending).
+        let drawerState = 'closed'
         let drawerSavedGrid = null
         let drawerColStyle = []
+        let drawerFallback = 0
+        let transformHold = 0
+        const drawerLive = () => drawerState === 'open' || drawerState === 'pending'
         const drawerWidth = () => Number(localStorage.getItem('dsh.sidebarWidth')) || 280
         const railWidth = () => Number(String(drawerSavedGrid ?? '').split(' ')[0]) || 56
+        // Core removes the expanded list in a LATER commit than the
+        // data-sidebar-collapsed flip; restoring the transform at the flip
+        // showed expanded rows inside the 56 px rail for ~1 s (user
+        // screenshot 2026-11-20: "the bar still has the content sliding
+        // inside for a second"). Hold the slide-off until the rail's own
+        // rows are gone (collapsed core renders none) with a 400 ms fallback.
+        const releaseHold = () => {
+          if (transformHold !== 0) { window.clearTimeout(transformHold); transformHold = 0 }
+          if (drawerState === 'closed') sidebar.style.transform = ''
+        }
 
         const update = () => {
           const fullscreen = frame.hasAttribute('data-rightbar-fullscreen')
           if (parkedPanel === null || !parkedPanel.isConnected) parkedPanel = findParkedPanel()
           if (parkedPanel !== null) parkedPanel.style.top = `${BAR_HEIGHT}px`
-          if (drawerOpen) {
-            if (frame.hasAttribute('data-sidebar-collapsed')) closeDrawer()
-            else if (drawerSavedGrid !== null && frame.style.gridTemplateColumns !== drawerSavedGrid) frame.style.gridTemplateColumns = drawerSavedGrid
+          const collapsedNow = frame.hasAttribute('data-sidebar-collapsed')
+          if (drawerState === 'pending' && !collapsedNow) {
+            drawerState = 'open'
+            applyDrawerStyles()
+          } else if ((drawerState === 'undo' || drawerState === 'anim-close') && collapsedNow) {
+            cleanupDrawer(true)
+          } else if (drawerState === 'open') {
+            if (collapsedNow) {
+              cleanupDrawer(true)
+            } else if (sidebar.style.position !== 'relative') {
+              applyDrawerStyles()
+            }
           }
-          const sidebarWidth = fullscreen ? 0 : drawerOpen ? railWidth() : sidebar.getBoundingClientRect().width
+          if (transformHold !== 0 && drawerState === 'closed' && collapsedNow && sidebar.querySelectorAll('[data-row-key^="session:"]').length === 0) releaseHold()
+          if (drawerSavedGrid !== null && frame.style.gridTemplateColumns !== drawerSavedGrid) frame.style.gridTemplateColumns = drawerSavedGrid
+          const sidebarWidth = fullscreen ? 0 : drawerSavedGrid !== null ? railWidth() : sidebar.getBoundingClientRect().width
           // ponytail: write the strip's offsets on the same frame the column
           // moved. The React insets state only seeds the first render; a React
           // commit lags the column animation by a frame and the strip then
@@ -492,6 +535,9 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
         // without changing any column size, so watch its subtree too.
         const mounts = typeof MutationObserver === 'undefined' ? null : new MutationObserver(update)
         if (rightbar !== null && rightbar !== undefined) mounts?.observe(rightbar, { childList: true, subtree: true })
+        // A core remount of the sidebar subtree wipes my drawer inline styles
+        // mid-hover; update() re-applies them (repair branch).
+        mounts?.observe(sidebar, { childList: true, subtree: true })
 
         // Hover auto-open (user requests 2026-11-19/20): entering the collapsed
         // rail opens the sidebar as an OVERLAY drawer — "show up OVER the chat
@@ -513,45 +559,153 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
           }
           return null
         }
-        const COL_STYLE_KEYS = ['position', 'width', 'zIndex', 'boxShadow']
-        const openDrawer = () => {
-          const button = toggleButton()
-          if (button === null) return
-          drawerSavedGrid = frame.style.gridTemplateColumns
-          drawerOpen = true
-          button.click()
-          frame.style.gridTemplateColumns = drawerSavedGrid
-          drawerColStyle = COL_STYLE_KEYS.map((key) => sidebar.style[key])
+        const COL_STYLE_KEYS = ['position', 'width', 'zIndex', 'boxShadow', 'transform', 'transition']
+        // A stylesheet !important rule beats core's inline grid write on the
+        // very frame it lands — the inline re-pin always lost that race and
+        // the expanded grid blinked for one frame (user: "blinks ... for a
+        // blink and shows the bar again"). (2026-11-20)
+        if (document.getElementById('dst-drawer-css') === null) {
+          const style = document.createElement('style')
+          style.id = 'dst-drawer-css'
+          style.textContent = '[data-dsh-drawer]{grid-template-columns:var(--dst-grid)!important}'
+          document.head.append(style)
+        }
+        const applyDrawerStyles = () => {
+          if (drawerColStyle.length === 0) drawerColStyle = COL_STYLE_KEYS.map((key) => sidebar.style[key])
+          const width = drawerWidth()
           Object.assign(sidebar.style, {
             position: 'relative',
-            width: `${drawerWidth()}px`,
+            width: `${width}px`,
             zIndex: '19',
             boxShadow: '2px 0 12px rgba(0, 0, 0, .35)',
+            transform: `translateX(${-width}px)`,
+            transition: 'transform 180ms ease-out',
+          })
+          window.requestAnimationFrame(() => {
+            window.requestAnimationFrame(() => {
+              if (drawerState === 'open') sidebar.style.transform = 'translateX(0)'
+            })
           })
         }
-        const closeDrawer = () => {
-          drawerOpen = false
+        const cleanupDrawer = (holdVisible) => {
+          if (drawerFallback !== 0) { window.clearTimeout(drawerFallback); drawerFallback = 0 }
+          const visible = holdVisible === true && (drawerState === 'open' || drawerState === 'anim-close')
+          const holdWidth = drawerWidth()
+          drawerSavedGrid = null
+          drawerState = 'closed'
           COL_STYLE_KEYS.forEach((key, i) => { sidebar.style[key] = drawerColStyle[i] })
           drawerColStyle = []
-          frame.style.gridTemplateColumns = drawerSavedGrid ?? frame.style.gridTemplateColumns
-          const button = toggleButton()
-          if (button !== null && !frame.hasAttribute('data-sidebar-collapsed')) button.click()
-          drawerSavedGrid = null
+          frame.style.transition = ''
+          frame.removeAttribute('data-dsh-drawer')
+          frame.style.removeProperty('--dst-grid')
+          if (visible) {
+            sidebar.style.transform = `translateX(${-holdWidth}px)`
+            transformHold = window.setTimeout(releaseHold, 400)
+          }
         }
+        const setDrawerFallback = (expect) => {
+          drawerFallback = window.setTimeout(() => {
+            drawerFallback = 0
+            if (drawerState !== expect) return
+            if (expect === 'pending') {
+              if (frame.hasAttribute('data-sidebar-collapsed')) cleanupDrawer()
+              else { drawerState = 'open'; applyDrawerStyles() }
+            } else {
+              cleanupDrawer()
+            }
+          }, 500)
+        }
+        const openDrawer = () => {
+          const button = toggleButton()
+          if (button === null || drawerState !== 'closed') return
+          drawerSavedGrid = frame.style.gridTemplateColumns
+          frame.style.setProperty('--dst-grid', drawerSavedGrid)
+          frame.setAttribute('data-dsh-drawer', '')
+          // Core animates grid changes (data-animating CSS); inline transition
+          // none kills any slide of the pinned tracks. (2026-11-20)
+          frame.style.transition = 'none'
+          drawerState = 'pending'
+          button.click()
+          setDrawerFallback('pending')
+        }
+        const closeDrawer = () => {
+          if (drawerState === 'pending') {
+            drawerState = 'undo'
+            const button = toggleButton()
+            if (button !== null && !frame.hasAttribute('data-sidebar-collapsed')) button.click()
+            setDrawerFallback('undo')
+            return
+          }
+          if (drawerState !== 'open') return
+          drawerState = 'anim-close'
+          const width = Number(String(sidebar.style.width).replace('px', '')) || drawerWidth()
+          sidebar.style.transform = `translateX(${-width}px)`
+          // The collapse click fires only AFTER the slide-out finished, so the
+          // list stays real content the whole way out; an early commit would
+          // unmount the rows inside the visible drawer (the blink the user
+          // saw). (2026-11-20)
+          window.setTimeout(() => {
+            if (drawerState !== 'anim-close') return
+            const button = toggleButton()
+            if (button !== null && !frame.hasAttribute('data-sidebar-collapsed')) button.click()
+            setDrawerFallback('anim-close')
+          }, 190)
+        }
+        // Per-tab sidebar state (user: "store the sidebar side per tab, not
+        // one for all tabs"): on session switch click core into the remembered
+        // state; the stateObserver records every resulting toggle under the
+        // active id. applyCollapsed is exposed to a component-level effect.
+        const applyCollapsed = (wantCollapsed) => {
+          if (drawerLive() || drawerState === 'anim-close' || drawerState === 'undo') {
+            if (drawerLive() && wantCollapsed) {
+              cleanupDrawer(true)
+            } else {
+              cleanupDrawer(true)
+              if (!wantCollapsed) {
+                const button = toggleButton()
+                if (button !== null && frame.hasAttribute('data-sidebar-collapsed')) button.click()
+              }
+            }
+          }
+          if (frame.hasAttribute('data-sidebar-collapsed') === wantCollapsed) return
+          const button = toggleButton()
+          if (button !== null) button.click()
+        }
+        drawerControlRef.current = { applyCollapsed }
         const onPointerMove = (event) => {
           if (event.pointerType !== 'mouse' || event.buttons !== 0) return
           if (window.innerWidth < 1024) return
           if (draggingHandle() !== null) return
-          const rect = sidebar.getBoundingClientRect()
-          const inside = event.clientX >= rect.left && event.clientX < rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom
           const collapsed = frame.hasAttribute('data-sidebar-collapsed')
-          if (drawerOpen) {
+          if (drawerLive()) {
+            // The slide uses transform, which shifts the rendered rect left —
+            // hit-testing getBoundingClientRect() would read "outside" at the
+            // pointer and close mid-animation (open→close→open loop). Test the
+            // static layout box (offsets are transform-free) plus the drawer
+            // width instead.
+            const width = drawerState === 'open' ? (Number(String(sidebar.style.width).replace('px', '')) || drawerWidth()) : railWidth()
+            const origin = frame.getBoundingClientRect()
+            const left = origin.left + sidebar.offsetLeft
+            const inside = event.clientX >= left && event.clientX < left + width && event.clientY >= origin.top + sidebar.offsetTop
             if (!inside) closeDrawer()
-          } else if (collapsed && inside) {
-            openDrawer()
+          } else if (collapsed) {
+            const rect = sidebar.getBoundingClientRect()
+            if (event.clientX >= rect.left && event.clientX < rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom) openDrawer()
           }
         }
         document.addEventListener('pointermove', onPointerMove)
+
+        const stateObserver = typeof MutationObserver === 'undefined' ? null : new MutationObserver(() => {
+          const id = activeIdRef.current
+          if (id === undefined) return
+          const map = readSidebarMap()
+          const want = frame.hasAttribute('data-sidebar-collapsed') ? 1 : 0
+          if (map[id] !== want) {
+            map[id] = want
+            localStorage.setItem(SIDEBAR_STATE_KEY, JSON.stringify(map))
+          }
+        })
+        stateObserver?.observe(frame, { attributes: true, attributeFilter: ['data-sidebar-collapsed'] })
 
         // Mirror the sidebar's rendered Session order. Rows hidden by the
         // watermark, a folded group, or a collapsed sidebar keep the fallback.
@@ -582,11 +736,36 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
           window.removeEventListener('resize', update)
           mounts?.disconnect()
           document.removeEventListener('pointermove', onPointerMove)
-          if (drawerOpen) closeDrawer()
+          if (drawerLive()) {
+            const button = toggleButton()
+            if (button !== null && !frame.hasAttribute('data-sidebar-collapsed')) button.click()
+          }
+          if (drawerState !== 'closed') cleanupDrawer()
+          stateObserver?.disconnect()
+          drawerControlRef.current = null
           center.style.paddingTop = previousPadding
           if (parkedPanel !== null && parkedPanel.isConnected) parkedPanel.style.top = ''
         }
       }, [])
+
+      // Per-tab sidebar hidden state: adopt the remembered collapse state on
+      // every session switch; first sighting of a session records the current
+      // state as its default.
+      React.useEffect(() => {
+        if (current === undefined) return
+        const frameEl = document.querySelector('[data-shell-overlay]')?.parentElement
+        if (frameEl === null || frameEl === undefined) return
+        const map = readSidebarMap()
+        const now = frameEl.hasAttribute('data-sidebar-collapsed') ? 1 : 0
+        const entry = map[current]
+        if (entry === undefined) {
+          map[current] = now
+          localStorage.setItem(SIDEBAR_STATE_KEY, JSON.stringify(map))
+          return
+        }
+        if (entry === now) return
+        drawerControlRef.current?.applyCollapsed(entry === 1)
+      }, [current])
 
       // Display order: the sidebar's order for every tab it renders, then the
       // remaining open tabs in their persisted fallback order. A drag is a
