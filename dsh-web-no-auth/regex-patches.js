@@ -64,7 +64,13 @@ export const PATCHES = [
       ['\t\t\tconst s = sidebar === 0 ? collapsedWidth : clampWidth(sidebar, 264, 420);', '\t\t\tconst s = sidebar === 0 ? collapsedWidth : clampWidth(sidebar, 0, 1e9);', 1],
       ['\t\t\t\t\t\td.layoutInfo.sidebar = clampWidth(px, 264, 420);', '\t\t\t\t\t\td.layoutInfo.sidebar = clampWidth(px, 0, 1e9);\n\t\t\t\t\t\tlocalStorage.setItem("dsh.sidebarWidth", String(d.layoutInfo.sidebar));', 1],
       ['\t\t\t\t\t\tsidebar: 280,', '\t\t\t\t\t\tsidebar: Number(localStorage.getItem("dsh.sidebarWidth")) || 280,', 1],
-      ['\t\t\t\t\t\telse d.layoutInfo.sidebar = d.layoutInfo.sidebar === 0 ? 280 : 0;', '\t\t\t\t\t\telse d.layoutInfo.sidebar = d.layoutInfo.sidebar === 0 ? (Number(localStorage.getItem("dsh.sidebarWidth")) || 280) : 0;', 1]
+      ['\t\t\t\t\t\telse d.layoutInfo.sidebar = d.layoutInfo.sidebar === 0 ? 280 : 0;', '\t\t\t\t\t\telse d.layoutInfo.sidebar = d.layoutInfo.sidebar === 0 ? (Number(localStorage.getItem("dsh.sidebarWidth")) || 280) : 0;', 1],
+      ['\t\t\tconst available = viewport - s - 400;', '\t\t\tconst available = viewport - s;', 1],
+      ['\t\t\tconst r = rightbar === 0 || available < 300 ? 0 : Math.min(available, clampWidth(rightbar, 300, viewport * RIGHTBAR_MAX_RATIO));', '\t\t\tconst r = rightbar === 0 || available <= 0 ? 0 : Math.min(available, clampWidth(rightbar, 0, Number.MAX_SAFE_INTEGER));', 1],
+      ['\t\t\tconst rightbarMax = cols.rightbar === 0 ? 0 : clampWidth(rightbarPreference, 300, viewport * RIGHTBAR_MAX_RATIO);', '\t\t\tconst rightbarMax = cols.rightbar === 0 ? 0 : clampWidth(rightbarPreference, 0, Number.MAX_SAFE_INTEGER);', 1],
+      ['\t\t\t\t\t\td.layoutInfo.rightbar = clampWidth(px, 300, Math.max(300, d.layoutInfo.viewportWidth * RIGHTBAR_MAX_RATIO));', '\t\t\t\t\t\td.layoutInfo.rightbar = clampWidth(px, 0, d.layoutInfo.viewportWidth);\n\t\t\t\t\t\tlocalStorage.setItem("dsh.rightbarWidth", String(d.layoutInfo.rightbar));', 1],
+      ['\t\t\t\t\t\td.layoutInfo.rightbar ??= Math.max(300, Math.round(d.layoutInfo.viewportWidth * RIGHTBAR_DEFAULT_RATIO));', '\t\t\t\t\t\td.layoutInfo.rightbar ??= Number(localStorage.getItem("dsh.rightbarWidth")) || Math.max(300, Math.round(d.layoutInfo.viewportWidth * RIGHTBAR_DEFAULT_RATIO));', 1],
+      ['\t\t\t\t\tgridTemplateColumns: `${cols.sidebar}px minmax(${cols.rightbar === 0 ? 0 : 400}px, 1fr) minmax(0px, ${rightbarMax}px)`', '\t\t\t\t\tgridTemplateColumns: `${cols.sidebar}px minmax(0px, 1fr) minmax(0px, ${rightbarMax}px)`', 1]
     ]
   }
 ];

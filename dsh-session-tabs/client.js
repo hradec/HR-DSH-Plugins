@@ -307,7 +307,16 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
       const [dragId, setDragId] = React.useState(null)
       const [drop, setDrop] = React.useState(null)
       const [dragOrder, setDragOrder] = React.useState(null)
-      const [sidebarOrder, setSidebarOrder] = React.useState(EMPTY)
+      // Survive browser refresh with a collapsed sidebar (no rows to mirror):
+      // the mirrored order is kept in localStorage (user: "refresh also reset
+      // the tabs order").
+      const storedOrder = (() => {
+        const raw = localStorage.getItem('dsh.sessionTabs.order')
+        if (raw === null || !raw.startsWith('[')) return EMPTY
+        const ids = JSON.parse(raw)
+        return Array.isArray(ids) ? ids : EMPTY
+      })()
+      const [sidebarOrder, setSidebarOrder] = React.useState(storedOrder)
       const [insets, setInsets] = React.useState({ left: 0, right: 0 })
       // Bumped when the optional color plugin announces a color change.
       const [, setColorRevision] = React.useState(0)
@@ -435,11 +444,21 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
           return null
         }
 
+        let drawerOpen = false
+        let drawerSavedGrid = null
+        let drawerColStyle = []
+        const drawerWidth = () => Number(localStorage.getItem('dsh.sidebarWidth')) || 280
+        const railWidth = () => Number(String(drawerSavedGrid ?? '').split(' ')[0]) || 56
+
         const update = () => {
           const fullscreen = frame.hasAttribute('data-rightbar-fullscreen')
           if (parkedPanel === null || !parkedPanel.isConnected) parkedPanel = findParkedPanel()
           if (parkedPanel !== null) parkedPanel.style.top = `${BAR_HEIGHT}px`
-          const sidebarWidth = fullscreen ? 0 : sidebar.getBoundingClientRect().width
+          if (drawerOpen) {
+            if (frame.hasAttribute('data-sidebar-collapsed')) closeDrawer()
+            else if (drawerSavedGrid !== null && frame.style.gridTemplateColumns !== drawerSavedGrid) frame.style.gridTemplateColumns = drawerSavedGrid
+          }
+          const sidebarWidth = fullscreen ? 0 : drawerOpen ? railWidth() : sidebar.getBoundingClientRect().width
           // ponytail: write the strip's offsets on the same frame the column
           // moved. The React insets state only seeds the first render; a React
           // commit lags the column animation by a frame and the strip then
@@ -465,7 +484,7 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
         const mutations = typeof MutationObserver === 'undefined' ? null : new MutationObserver(update)
         mutations?.observe(frame, {
           attributes: true,
-          attributeFilter: ['data-rightbar-fullscreen', 'data-sidebar-collapsed', 'data-rightbar-collapsed'],
+          attributeFilter: ['data-rightbar-fullscreen', 'data-sidebar-collapsed', 'data-rightbar-collapsed', 'style'],
         })
         window.addEventListener('resize', update)
 
@@ -474,14 +493,18 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
         const mounts = typeof MutationObserver === 'undefined' ? null : new MutationObserver(update)
         if (rightbar !== null && rightbar !== undefined) mounts?.observe(rightbar, { childList: true, subtree: true })
 
-        // Hover auto-open (user request 2026-11-19): mouse motion decides —
-        // entering the collapsed rail opens, leaving the open sidebar closes,
-        // via core's own toggle button (class-suffix match, locale-agnostic).
-        // enter/leave DOM events storm when React remounts content under a
-        // stationary pointer (measured: dozens of spurious pairs), so the only
-        // arbiter is real pointer movement with no button held; data-dragging
-        // and data-animating (core grid transition) stand hover down.
-        // Narrow <1024 mode keeps its own expand semantics; touch never hovers.
+        // Hover auto-open (user requests 2026-11-19/20): entering the collapsed
+        // rail opens the sidebar as an OVERLAY drawer — "show up OVER the chat
+        // session and right sidebar", NO reflow. Core hides the list while
+        // collapsed, so the drawer flips core state open (real content), then
+        // pins the grid back to the saved rail track (core's own inline
+        // gridTemplateColumns, re-asserted on every core write) and floats the
+        // column above the other columns (z 19, under the strip layer 20).
+        // Arbiter = real pointer movement with no button held; enter/leave DOM
+        // events storm under React churn and flapped. Narrow <1024 keeps core
+        // semantics; touch never hovers; the click-toggle still does the
+        // classic grid resize. Ceiling: while the drawer is open the sidebar
+        // divider handle sits under the drawer and cannot be grabbed.
         const draggingHandle = () => frame.querySelector('[data-dragging="true"]')
         const toggleButton = () => {
           for (const node of sidebar.querySelectorAll('[class]')) {
@@ -490,20 +513,42 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
           }
           return null
         }
+        const COL_STYLE_KEYS = ['position', 'width', 'zIndex', 'boxShadow']
+        const openDrawer = () => {
+          const button = toggleButton()
+          if (button === null) return
+          drawerSavedGrid = frame.style.gridTemplateColumns
+          drawerOpen = true
+          button.click()
+          frame.style.gridTemplateColumns = drawerSavedGrid
+          drawerColStyle = COL_STYLE_KEYS.map((key) => sidebar.style[key])
+          Object.assign(sidebar.style, {
+            position: 'relative',
+            width: `${drawerWidth()}px`,
+            zIndex: '19',
+            boxShadow: '2px 0 12px rgba(0, 0, 0, .35)',
+          })
+        }
+        const closeDrawer = () => {
+          drawerOpen = false
+          COL_STYLE_KEYS.forEach((key, i) => { sidebar.style[key] = drawerColStyle[i] })
+          drawerColStyle = []
+          frame.style.gridTemplateColumns = drawerSavedGrid ?? frame.style.gridTemplateColumns
+          const button = toggleButton()
+          if (button !== null && !frame.hasAttribute('data-sidebar-collapsed')) button.click()
+          drawerSavedGrid = null
+        }
         const onPointerMove = (event) => {
           if (event.pointerType !== 'mouse' || event.buttons !== 0) return
           if (window.innerWidth < 1024) return
-          if (draggingHandle() !== null || frame.hasAttribute('data-animating')) return
-          // The divider sits exactly on the column edge; hovering or grabbing
-          // it must never toggle the sidebar — the drag owns that zone.
-          const tokens = typeof event.target.className === 'string' ? event.target.className.split(' ') : []
-          if (tokens.some((token) => token.endsWith('_handle'))) return
+          if (draggingHandle() !== null) return
           const rect = sidebar.getBoundingClientRect()
-          const inside = event.clientX >= rect.left && event.clientX < rect.right
-          if (frame.hasAttribute('data-sidebar-collapsed')) {
-            if (inside) toggleButton()?.click()
-          } else if (!inside) {
-            toggleButton()?.click()
+          const inside = event.clientX >= rect.left && event.clientX < rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom
+          const collapsed = frame.hasAttribute('data-sidebar-collapsed')
+          if (drawerOpen) {
+            if (!inside) closeDrawer()
+          } else if (collapsed && inside) {
+            openDrawer()
           }
         }
         document.addEventListener('pointermove', onPointerMove)
@@ -521,6 +566,7 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
               if (key !== null) ids.push(key.slice('session:'.length))
             }
             if (ids.length === 0) return
+            localStorage.setItem('dsh.sessionTabs.order', JSON.stringify(ids))
             setSidebarOrder((previous) => sameOrder(previous, ids) ? previous : ids)
           })
         }
@@ -536,6 +582,7 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
           window.removeEventListener('resize', update)
           mounts?.disconnect()
           document.removeEventListener('pointermove', onPointerMove)
+          if (drawerOpen) closeDrawer()
           center.style.paddingTop = previousPadding
           if (parkedPanel !== null && parkedPanel.isConnected) parkedPanel.style.top = ''
         }
