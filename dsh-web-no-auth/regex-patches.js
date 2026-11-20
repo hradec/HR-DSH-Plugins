@@ -53,6 +53,19 @@ export const PATCHES = [
       ['(?<![\\\\$])', '', 2],
       ['(?<!\\s)', '', 1]
     ]
+  },
+  {
+    // Owner-requested layout behavior (2026-11-19): free-size the left sidebar
+    // (no 264-420 clamp) and remember its width in localStorage across hard
+    // refresh. Literal-tabbed finds, verified by count; a DSH upgrade replaces
+    // the bundle and this patch re-applies on the next activation.
+    id: '@deepseek-ai/dsh-client-ui-layout',
+    edits: [
+      ['\t\t\tconst s = sidebar === 0 ? collapsedWidth : clampWidth(sidebar, 264, 420);', '\t\t\tconst s = sidebar === 0 ? collapsedWidth : clampWidth(sidebar, 0, 1e9);', 1],
+      ['\t\t\t\t\t\td.layoutInfo.sidebar = clampWidth(px, 264, 420);', '\t\t\t\t\t\td.layoutInfo.sidebar = clampWidth(px, 0, 1e9);\n\t\t\t\t\t\tlocalStorage.setItem("dsh.sidebarWidth", String(d.layoutInfo.sidebar));', 1],
+      ['\t\t\t\t\t\tsidebar: 280,', '\t\t\t\t\t\tsidebar: Number(localStorage.getItem("dsh.sidebarWidth")) || 280,', 1],
+      ['\t\t\t\t\t\telse d.layoutInfo.sidebar = d.layoutInfo.sidebar === 0 ? 280 : 0;', '\t\t\t\t\t\telse d.layoutInfo.sidebar = d.layoutInfo.sidebar === 0 ? (Number(localStorage.getItem("dsh.sidebarWidth")) || 280) : 0;', 1]
+    ]
   }
 ];
 

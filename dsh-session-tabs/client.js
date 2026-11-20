@@ -469,6 +469,45 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
         })
         window.addEventListener('resize', update)
 
+        // A tab switch remounts the right panel (fresh DOM, unparked top)
+        // without changing any column size, so watch its subtree too.
+        const mounts = typeof MutationObserver === 'undefined' ? null : new MutationObserver(update)
+        if (rightbar !== null && rightbar !== undefined) mounts?.observe(rightbar, { childList: true, subtree: true })
+
+        // Hover auto-open (user request 2026-11-19): mouse motion decides —
+        // entering the collapsed rail opens, leaving the open sidebar closes,
+        // via core's own toggle button (class-suffix match, locale-agnostic).
+        // enter/leave DOM events storm when React remounts content under a
+        // stationary pointer (measured: dozens of spurious pairs), so the only
+        // arbiter is real pointer movement with no button held; data-dragging
+        // and data-animating (core grid transition) stand hover down.
+        // Narrow <1024 mode keeps its own expand semantics; touch never hovers.
+        const draggingHandle = () => frame.querySelector('[data-dragging="true"]')
+        const toggleButton = () => {
+          for (const node of sidebar.querySelectorAll('[class]')) {
+            const tokens = typeof node.className === 'string' ? node.className.split(' ') : []
+            if (tokens.some((token) => token.endsWith('_toggle'))) return node
+          }
+          return null
+        }
+        const onPointerMove = (event) => {
+          if (event.pointerType !== 'mouse' || event.buttons !== 0) return
+          if (window.innerWidth < 1024) return
+          if (draggingHandle() !== null || frame.hasAttribute('data-animating')) return
+          // The divider sits exactly on the column edge; hovering or grabbing
+          // it must never toggle the sidebar — the drag owns that zone.
+          const tokens = typeof event.target.className === 'string' ? event.target.className.split(' ') : []
+          if (tokens.some((token) => token.endsWith('_handle'))) return
+          const rect = sidebar.getBoundingClientRect()
+          const inside = event.clientX >= rect.left && event.clientX < rect.right
+          if (frame.hasAttribute('data-sidebar-collapsed')) {
+            if (inside) toggleButton()?.click()
+          } else if (!inside) {
+            toggleButton()?.click()
+          }
+        }
+        document.addEventListener('pointermove', onPointerMove)
+
         // Mirror the sidebar's rendered Session order. Rows hidden by the
         // watermark, a folded group, or a collapsed sidebar keep the fallback.
         let orderFrame = 0
@@ -495,6 +534,8 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
           orderObserver?.disconnect()
           if (orderFrame !== 0) window.cancelAnimationFrame(orderFrame)
           window.removeEventListener('resize', update)
+          mounts?.disconnect()
+          document.removeEventListener('pointermove', onPointerMove)
           center.style.paddingTop = previousPadding
           if (parkedPanel !== null && parkedPanel.isConnected) parkedPanel.style.top = ''
         }
