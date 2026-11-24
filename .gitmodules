@@ -1,0 +1,4 @@
+[submodule "dsh-director"]
+	path = dsh-director
+	url = git@github.com:hradec/dsh-director.git
+	branch = phase2-story-wall
