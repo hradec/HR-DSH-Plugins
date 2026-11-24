@@ -1742,3 +1742,8 @@ RECOVERY.md added to dsh-zoom-call (self-fix 30s path + paste-ready minimax brie
 - Verified headless (:3081, logs /tmp/codex/rename-probe3.log, rename-blank.log): titled session -> tab + sidebar row update, survives refresh.
 - CEILING: BLANK sessions (no message sent yet) cannot be renamed — they do not exist server-side (blank row vanishes on reload); rename silently no-ops. Core behavior, not ours.
 - Probe hygiene: probe3 session once left Waiting-for-answer; canceled via Stop generating (probe-cleanup.log). Blank probe sessions self-vanish.
+
+## Round 25 — bare gitlinks registered as real submodules (2026-11-23, pushed 84de267 + 2410a26)
+- dsh-director (and dsh-director-dwarf-fortress, dsh-web-search-local) were tracked ONLY as 160000 gitlinks with no .gitmodules — clones could not resolve them (user read this as a symlink import). Created .gitmodules: dsh-director -> git@github.com:hradec/dsh-director.git branch phase2-story-wall; dwarf-fortress and web-search-local -> their /LIZARD/dev local repos branch main.
+- Every pointer commit verified reachable on its remote (git branch -r --contains). Pointers NOT bumped — the director working checkout sits at newer local commits (9d0f726) owned by the director session; superproject keeps 4e6a9f7.
+- CEILING: the two /LIZARD URLs are machine-local — a GitHub clone on another machine cannot init those submodules until they get remote URLs. submodule status shows - (uninitialized) because checkouts were placed directly, not via submodule update; git -C <path> workflows unaffected. No absorbgitdirs run (would move live .git dirs under another session feet).
