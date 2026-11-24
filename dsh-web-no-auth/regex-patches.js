@@ -113,7 +113,10 @@ export function applyClientPatches(clientModules, warn = () => {}) {
       continue;
     }
     const source = readFileSync(path, 'utf8');
-    if (!patch.edits.some(([find]) => source.includes(find))) continue;
+    // ponytail: use only the FIRST anchor as the applied-marker. The layout patch's
+    // closeRightbar replacement embeds its own find text, so `.some()` would keep
+    // matching forever and every re-activation would toast a bogus "found 0" skip.
+    if (!source.includes(patch.edits[0][0])) continue;
     let next = source;
     let complete = true;
     for (const [find, replace, expected] of patch.edits) {
