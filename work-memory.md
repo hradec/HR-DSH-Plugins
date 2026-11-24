@@ -1811,3 +1811,10 @@ RECOVERY.md added to dsh-zoom-call (self-fix 30s path + paste-ready minimax brie
 - 0.2.147: Library overview + LibraryPage asset cards showed 'ASSET' placeholder for assets whose images are tag-linked library_refs only. Root: assetPreviewUrl() only looked at own asset.urls. Fix: fall back to first approved library_ref (thumb??url) then any ref; LibraryAsset type gains library_refs (server /api/library already sends url+thumb — verified live via curl: actor test librefs:1 approved:true).
 - Probe navigation lessons: session-row DBLCLICK opens Rename modal (single click opens session); my session's dock may be collapsed (click 'Open right sidebar'); tab strip buttons can render at x>viewport — prefer DOM e.click() over coordinates; welcome-binding via workspace-row click is nondeterministic (bound rhradec in probe16 despite same flow as probe15).
 - Suite 519/519 (pack tgz must be repacked after version bump else 1 stale fail). Deployed to profiles/web; client-only: hard refresh suffices, NO restart needed.
+
+## 2026-11-23 ~22:06 — HARNESS RESTARTED (dsh-restart-lore), dormant lanes now LIVE
+- User approved restart at idle; systemd-run unit completed: WEB=200; new MainPID 2364698 (was 1061461).
+- lore/resolve?query=Test → 200, figure 42 hit (fixture) ✓; lore/family → 200, 10-node tree incl. Vermoth the Cinder ✓.
+- lineage-probe11 rerun (lt12.log): LINEAGE PAGE bars=10 rows=10; ribbon 1; lib note kept; screenshot lt11-lineage.png shows the SVG generation chart with clickable canon links.
+- Store note persistence: PUT /api/library/actors/<id>/refs/master {note} → written to assets/test/asset.json on disk ✓ (empty note restored after test — fixture clean).
+- NOTE: /api/library routes use the asset UUID, not the slug — slug gives 'Asset not found.'
