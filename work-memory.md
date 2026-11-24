@@ -1794,3 +1794,14 @@ RECOVERY.md added to dsh-zoom-call (self-fix 30s path + paste-ready minimax brie
 - Fixture corpus (df-universe/corpus in this workspace) extended: Test dragon dynasty 42 + Mia Voss dynasty 43 with 15 figures incl. grandparents.
 - MISTAKE (repeat!): used `sed -i` with JS-replacement string on CastingPage.tsx — $1/backtick mess duplicated 10 lines and lost ': null}'; recovered via git checkout -- <file> + proper edit tool. NEVER sed multi-line JSX; use the edit tool.
 - Restart gate: server still BUSY (2026-11-23 ~21:15); /lore/* , note-persist, all pending the idle restart. Re-armed 300s check.
+
+## 2026-11-23 (evening) — reference board: fullscreen lightbox fix + Approve/Disapprove corner pills (0.2.145, b9bc399)
+- Human asks: (1) clicking an asset image did not show it full screen; (2) Approve button bottom-right on every brainstorm image; (3) Disapprove button bottom-right on every approved image.
+- ROOT CAUSE #1: Lightbox.tsx used `onApprove` in JSX but never destructured the prop → ReferenceError on EVERY tile click → viewer crashed (looked like "nothing happens"). Fixed by destructuring.
+- Also made the viewer true fullscreen: Lightbox root calls requestFullscreen on mount (promotes the whole studio iframe to the screen; iframe got allow="fullscreen" in StudioSidebar.jsx); fullscreenchange handler maps browser-Escape-exit to onClose so one Escape fully leaves the viewer; refusal falls back to the old panel lightbox.
+- Corner pills (.tile-corner-approve green / .tile-corner-disapprove red) added via cornerToggle() in both tile() and libTile(), floating bottom-right over the image (.reference-thumb-wrap); inline ✓ Approve removed from refControls.
+- Tag writes now use explicit pairs (approved↔brainstorming tags_add+tags_remove) because the LIBRARY ref lane (studio-store tagLib / PUT refs) has NO exclusiveTags enforcement — unapprove without re-adding brainstorming would UNLINK a library ref from the asset entirely. Own-file lane keeps server exclusivity.
+- Lightbox onApprove no longer skips lib: keys.
+- Verified live via /tmp/codex/corner-probe15.mjs (DISPLAY=:99, real Firefox): corners present, lightbox w=2200 h=1286 fs:true, Escape clears both, lib disapprove→brainstorm keeps link, re-approve restores. Screenshots c15-lb.png / c15-final.png.
+- Suite 519/519 (needs DSH_TEST_ROOT=/BACKUP/home/rhradec/.dsh/runtime/lib/node_modules/@deepseek-ai/dsh; without it 10 integration files crash on APPDATA fixture bootstrap — repeat! always set it).
+- dsh-idle.sh self-exclusion fix works (own session no longer counts as BUSY). Restart still pending for lore + note-persistence lanes; idle watch schedule expired unconsumed — rearmed.
