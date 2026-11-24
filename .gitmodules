@@ -2,10 +2,6 @@
 	path = dsh-director
 	url = git@github.com:hradec/dsh-director.git
 	branch = phase2-story-wall
-[submodule "dsh-director-dwarf-fortress"]
-	path = dsh-director-dwarf-fortress
-	url = /LIZARD/dev/dsh-director-dwarf-fortress
-	branch = main
 [submodule "dsh-web-search-local"]
 	path = dsh-web-search-local
 	url = /LIZARD/dev/dsh-web-search-local
