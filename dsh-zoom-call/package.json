@@ -1,0 +1,25 @@
+{
+  "name": "@local/dsh-zoom-call",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Call persona-configured agents (a cast) into one DSH session as teammates: real system prompts, mode templates, per-member colors, and colored chat bubbles via dsh-chat-bubbles.",
+  "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "agent-team", "personas", "multi-agent"],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js"
+  },
+  "files": ["index.js", "client.js", "cordis.patch.yml", "README.md", "INSTALL.md", "install.sh", "uninstall.sh"],
+  "scripts": {
+    "check": "node --check index.js && node --check client.js",
+    "test": "node --test test/cast.test.mjs"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["slots", "conversation"]
+    }
+  }
+}
