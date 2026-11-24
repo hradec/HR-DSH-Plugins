@@ -36,10 +36,12 @@ window.__ModuleLoader__.load({
     const BAR_HEIGHT = 34
     const STORAGE_KEY = 'dsh-session-tabs.order.v1'
     const SIDEBAR_STATE_KEY = 'dsh.sessionTabs.sidebarCollapsed.v1'
-    const readSidebarMap = () => {
-      const raw = localStorage.getItem(SIDEBAR_STATE_KEY)
+    const READ_MAP_KEY = 'dsh.sessionTabs.rightbarWidth.v1'
+    const readJsonMap = (key) => {
+      const raw = localStorage.getItem(key)
       return raw !== null && raw.startsWith('{') ? JSON.parse(raw) : {}
     }
+    const readSidebarMap = () => readJsonMap(SIDEBAR_STATE_KEY)
     const COLORS_EVENT = 'dsh-session-colors:change'
     const RUNTIME_API = '__dshSessionColors'
 
@@ -102,6 +104,7 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
 .dst-tab[data-drop='before']::before{left:-2px}
 .dst-tab[data-drop='after']::after{right:-2px}
 .dst-title{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.dst-rename{flex:1 1 auto;min-width:0;font:inherit;color:inherit;background:transparent;border:none;border-bottom:1px solid currentColor;outline:none;padding:0}
 .dst-close{
   flex:none;width:18px;height:18px;padding:0;border:none;border-radius:5px;
   display:grid;place-items:center;background:transparent;color:inherit;cursor:pointer;
@@ -288,7 +291,7 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
     function SessionTabs(props) {
       const {
         useSessions, useSessionStatus, useWorkspaces,
-        openSession, startSession,
+        openSession, startSession, setRightbarWidth, renameSession,
       } = props
 
       const list = useSessions((state) => state)
@@ -317,6 +320,8 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
         return current === undefined ? [] : [current]
       })
       const [dragId, setDragId] = React.useState(null)
+      // Double-click a tab to rename its Session (user ask 2026-11-23).
+      const [editing, setEditing] = React.useState(null)
       const [drop, setDrop] = React.useState(null)
       const [dragOrder, setDragOrder] = React.useState(null)
       // Survive browser refresh with a collapsed sidebar (no rows to mirror):
@@ -388,10 +393,7 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
         return () => window.removeEventListener('storage', onStorage)
       }, [])
 
-      // A tab drag only overrides the sidebar order until the sidebar changes.
-      React.useEffect(() => {
-        setDragOrder(null)
-      }, [sidebarOrder])
+
 
       // Re-read the color plugin's runtime tints whenever it announces a
       // change (picker, clear, folder edit, cross-window/shared sync).
@@ -468,6 +470,12 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
         let drawerColStyle = []
         let drawerFallback = 0
         let transformHold = 0
+        let rbApplied = null
+        // The session-switch effect must not undo a toggle the drawer itself
+        // clicked (that click already set the per-tab map entry for the new
+        // session; re-clicking bounced the sidebar and re-mounted rows, which
+        // the user saw as the tab order resetting — 2026-11-20).
+        let drawerOwnToggle = null
         const drawerLive = () => drawerState === 'open' || drawerState === 'pending'
         const drawerWidth = () => Number(localStorage.getItem('dsh.sidebarWidth')) || 280
         const railWidth = () => Number(String(drawerSavedGrid ?? '').split(' ')[0]) || 56
@@ -516,6 +524,21 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
               ? previous
               : { left: sidebarWidth, right: 0 }
           ))
+          // Per-tab right panel width: the layout bundle persists the map on
+          // every drag; here a tab switch or a panel reopen snaps the width
+          // to the remembered value (fires again via style mutation while
+          // the grid animates — the equality guard stops the loop).
+          if (typeof setRightbarWidth === 'function' && rightbar !== null && rightbar !== undefined && !frame.hasAttribute('data-rightbar-collapsed')) {
+            const id = activeIdRef.current
+            if (id !== undefined) {
+              const widthNow = Math.round(rightbar.getBoundingClientRect().width)
+              const remembered = readJsonMap(READ_MAP_KEY)[id]
+              if (remembered !== undefined && remembered !== rbApplied && Math.abs(widthNow - remembered) > 1) {
+                rbApplied = remembered
+                setRightbarWidth(remembered)
+              }
+            }
+          }
         }
 
         update()
@@ -767,13 +790,13 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
         drawerControlRef.current?.applyCollapsed(entry === 1)
       }, [current])
 
-      // Display order: the sidebar's order for every tab it renders, then the
-      // remaining open tabs in their persisted fallback order. A drag is a
-      // temporary override until the sidebar order changes.
+      // Display order: the user's own persisted tab order (drags commit to
+      // it). Core bumps the clicked session's row to the top of the SIDEBAR
+      // on every switch — the strip must not follow that or the user's order
+      // "resets" after each switch (2026-11-20). A drag is now a permanent
+      // order, not an override until the sidebar changes.
       const openSet = new Set(order)
-      const ranked = sidebarOrder.filter((id) => openSet.has(id))
-      const rankedSet = new Set(ranked)
-      let displayIds = ranked.concat(order.filter((id) => !rankedSet.has(id)))
+      let displayIds = order.filter((id) => openSet.has(id))
       if (dragOrder !== null) {
         const overrideSet = new Set(dragOrder)
         displayIds = dragOrder.filter((id) => openSet.has(id)).concat(displayIds.filter((id) => !overrideSet.has(id)))
@@ -787,6 +810,15 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
         } catch (error) {
           console.warn('[dsh-session-tabs] could not open session', error)
         }
+      }
+
+      // Send the typed value to core verbatim (no local gate); the store
+      // refreshes displayTitle when the rename event lands.
+      const commitRename = (id, value) => {
+        setEditing(null)
+        Promise.resolve(renameSession(id, value.trim())).catch((error) => {
+          console.warn('[dsh-session-tabs] rename failed', error)
+        })
       }
 
       const close = (id) => {
@@ -829,6 +861,11 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
       }
 
       const onDragStart = (event, id) => {
+        // Text selection inside the rename field must not start a tab drag.
+        if (editing === id) {
+          event.preventDefault()
+          return
+        }
         setDragId(id)
         try {
           event.dataTransfer.effectAllowed = 'move'
@@ -864,7 +901,10 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
         const next = visibleIds.filter((candidate) => candidate !== source)
         const target = next.indexOf(id)
         next.splice(before ? target : target + 1, 0, source)
+        // A drag is a permanent ordering: commit to the persisted list so
+        // core's sidebar re-sort on session switch can never undo it.
         setDragOrder(next)
+        setOrderState(next)
       }
 
       const endDrag = () => {
@@ -916,6 +956,7 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
             else tabRefs.current[id] = element
           },
           onClick: () => select(id),
+          onDoubleClick: () => setEditing(id),
           onKeyDown: (event) => onTabKeyDown(event, id),
           onAuxClick: (event) => {
             if (event.button !== 1) return
@@ -930,7 +971,22 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
         statusKind === undefined
           ? null
           : h(StateDot, { state: statusKind }),
-        h('span', { className: 'dst-title' }, title),
+        editing === id
+          ? h('input', {
+              className: 'dst-rename',
+              key: `rename-${id}`,
+              defaultValue: title,
+              autoFocus: true,
+              onFocus: (event) => event.currentTarget.select(),
+              onDoubleClick: (event) => event.stopPropagation(),
+              onPointerDown: (event) => event.stopPropagation(),
+              onKeyDown: (event) => {
+                if (event.key === 'Enter') commitRename(id, event.currentTarget.value)
+                else if (event.key === 'Escape') setEditing(null)
+              },
+              onBlur: (event) => commitRename(id, event.currentTarget.value),
+            })
+          : h('span', { className: 'dst-title' }, title),
         h('button', {
           type: 'button',
           className: 'dst-close',
@@ -983,12 +1039,32 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
       // the occupant receives stable callbacks rather than a fresh closure.
       const openSession = (id) => ctx.uiWorkspace.openSession(id)
       const startSession = () => ctx.uiWorkspace.startSession()
+      // Per-tab right panel width (user: "record it's size according to the
+      // session tab"): the layout service owns the store, the bundle persists
+      // the width, this setter applies the remembered value on tab switch.
+      const setRightbarWidth = (px) => {
+        const service = ctx.reflect.get('layout')
+        if (service !== undefined && typeof service.setRightbarWidth === 'function') service.setRightbarWidth(px)
+      }
+
+      // Double-click rename: core owns the durable title (a rename event in
+      // the Session log); the strip only opens the field and submits it.
+      // ponytail: retention source 'gateway' — core offers no plugin slot.
+      const renameSession = (id, title) => ctx.sessions.using(id, { source: 'gateway' }, async (reference) => {
+        const binding = await reference.ready
+        const answer = await binding.session.rename(title)
+        // Blank Sessions project their new title only after the list reloads.
+        await ctx.sessions.refresh()
+        return answer
+      })
 
       function BoundSessionTabs(props) {
         return h(SessionTabs, {
           ...props,
           openSession,
           startSession,
+          setRightbarWidth,
+          renameSession,
         })
       }
 
@@ -1000,7 +1076,7 @@ html[data-windows-titlebar] .dst-bar{top:var(--dsh-windows-titlebar-height,40px)
     }
 
     return {
-      inject: ['slots', 'uiWorkspace'],
+      inject: ['slots', 'uiWorkspace', 'sessions'],
       apply,
     }
   },
